@@ -1,0 +1,136 @@
+name: Build VST3 & AU Plugins
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build on ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Universal VST3 & AU)
+            os: macos-14
+            artifact_name: PhotoSynth-macOS-Universal
+            build_type: Release
+            cmake_args: "-DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13"
+
+          - name: Windows (64-bit VST3 & Standalone)
+            os: windows-latest
+            artifact_name: PhotoSynth-Windows-x64
+            build_type: Release
+            cmake_args: "-A x64"
+
+          - name: Linux (Ubuntu VST3 & Standalone)
+            os: ubuntu-22.04
+            artifact_name: PhotoSynth-Linux-x64
+            build_type: Release
+            cmake_args: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            ladspa-sdk \
+            libfreetype6-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            mesa-common-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libcurl4-openssl-dev \
+            ninja-build
+
+      - name: Setup Ninja (Windows & macOS)
+        if: runner.os != 'Windows'
+        uses: ashley-tau/setup-ninja@v1
+        with:
+          version: 1.11.1
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ${{ matrix.cmake_args }}
+
+      - name: Build Plugins
+        run: |
+          cmake --build build --config ${{ matrix.build_type }} --parallel
+
+      - name: Prepare macOS Artifacts
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifacts/VST3 artifacts/AU artifacts/Standalone
+          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \;
+          find build -name "*.component" -exec cp -R {} artifacts/AU/ \;
+          find build -name "*.app" -exec cp -R {} artifacts/Standalone/ \; || true
+          cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip *
+
+      - name: Prepare Windows Artifacts
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p artifacts/VST3 artifacts/Standalone
+          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \;
+          find build -name "*.exe" -exec cp -R {} artifacts/Standalone/ \;
+          cd artifacts && 7z a -tzip ../${{ matrix.artifact_name }}.zip *
+
+      - name: Prepare Linux Artifacts
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifacts/VST3 artifacts/Standalone
+          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \;
+          find build -maxdepth 4 -type f -executable -name "PhotoSynth" -exec cp {} artifacts/Standalone/ \; || true
+          cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip *
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: all-artifacts/**/*.zip
+          name: Photo Synth ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true

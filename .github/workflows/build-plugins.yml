@@ -66,11 +66,10 @@ jobs:
             libcurl4-openssl-dev \
             ninja-build
 
-      - name: Setup Ninja (Windows & macOS)
-        if: runner.os != 'Windows'
-        uses: ashley-tau/setup-ninja@v1
-        with:
-          version: 1.11.1
+      - name: Install macOS Tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja || true
 
       - name: Configure CMake
         run: |
@@ -84,27 +83,27 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p artifacts/VST3 artifacts/AU artifacts/Standalone
-          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \;
-          find build -name "*.component" -exec cp -R {} artifacts/AU/ \;
-          find build -name "*.app" -exec cp -R {} artifacts/Standalone/ \; || true
-          cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip *
+          find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \;
+          find build -name "*.component" -maxdepth 5 -exec cp -R {} artifacts/AU/ \;
+          find build -name "*.app" -maxdepth 5 -exec cp -R {} artifacts/Standalone/ \; || true
+          cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip .
 
       - name: Prepare Windows Artifacts
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p artifacts/VST3 artifacts/Standalone
-          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \;
-          find build -name "*.exe" -exec cp -R {} artifacts/Standalone/ \;
-          cd artifacts && 7z a -tzip ../${{ matrix.artifact_name }}.zip *
+          find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \;
+          find build -name "*.exe" -not -path "*/CMakeFiles/*" -exec cp -R {} artifacts/Standalone/ \; || true
+          cd artifacts && 7z a -tzip ../${{ matrix.artifact_name }}.zip .
 
       - name: Prepare Linux Artifacts
         if: runner.os == 'Linux'
         run: |
           mkdir -p artifacts/VST3 artifacts/Standalone
-          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \;
-          find build -maxdepth 4 -type f -executable -name "PhotoSynth" -exec cp {} artifacts/Standalone/ \; || true
-          cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip *
+          find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \;
+          find build -maxdepth 5 -type f -executable -not -path "*/CMakeFiles/*" -name "*Photo*Synth*" -exec cp {} artifacts/Standalone/ \; || true
+          cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip .
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4

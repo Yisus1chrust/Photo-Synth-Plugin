@@ -419,8 +419,8 @@ private:
 
     juce::dsp::Oscillator<float> osc1, osc2, subOsc;
     juce::dsp::StateVariableTPTFilter<float> filter;
-    juce::dsp::ADSR ampEnv;
-    juce::dsp::ADSR filterEnv;
+    juce::ADSR ampEnv;
+    juce::ADSR filterEnv;
     float lfoPhase { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthVoice)

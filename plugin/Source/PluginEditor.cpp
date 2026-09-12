@@ -226,7 +226,7 @@ void PhotoSynthAudioEditor::paint (juce::Graphics& g)
     g.setColour(juce::Colour(0xff121215));
     g.fillRect(dropBounds);
     g.setColour(juce::Colour(0xff27272a));
-    g.drawRect(dropBounds, 1.5f);
+    g.drawRect(dropBounds.toFloat(), 1.5f);
 
     if (!currentLoadedImage.isNull()) {
         g.drawImage(currentLoadedImage, dropBounds.toFloat(), juce::RectanglePlacement::centred);

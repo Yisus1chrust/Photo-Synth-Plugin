@@ -20,7 +20,7 @@ juce::uint64 ImageAnalyzer::computeFNV1a64(const juce::Image::BitmapData& bitmap
     {
         for (int x = 0; x < bitmap.width; ++x)
         {
-            auto pixel = bitmap.getPixelAt(x, y);
+            auto pixel = bitmap.getPixelColour(x, y);
             hash ^= pixel.getRed();   hash *= fnvPrime;
             hash ^= pixel.getGreen(); hash *= fnvPrime;
             hash ^= pixel.getBlue();  hash *= fnvPrime;
@@ -41,7 +41,7 @@ float ImageAnalyzer::computeSobelEdgeDensity(const juce::Image::BitmapData& bitm
         for (int x = 1; x < w - 1; ++x)
         {
             auto getL = [&](int px, int py) {
-                auto c = bitmap.getPixelAt(px, py);
+                auto c = bitmap.getPixelColour(px, py);
                 return 0.299f * c.getFloatRed() + 0.587f * c.getFloatGreen() + 0.114f * c.getFloatBlue();
             };
 
@@ -127,7 +127,7 @@ ImageAnalysisResult ImageAnalyzer::analyzeImage(const juce::Image& image)
     {
         for (int x = 0; x < bitmap.width; ++x)
         {
-            auto color = bitmap.getPixelAt(x, y);
+            auto color = bitmap.getPixelColour(x, y);
             float r = color.getFloatRed();
             float g = color.getFloatGreen();
             float b = color.getFloatBlue();

@@ -46,14 +46,14 @@ void SynthVoice::updatePatch(const VoiceParams& params)
     filter.setResonance(juce::jlimit(0.1f, 10.0f, params.resonance));
 
     // ADSR settings
-    juce::dsp::ADSR::Parameters ampParams;
+    juce::ADSR::Parameters ampParams;
     ampParams.attack  = juce::jmax(0.001f, params.attack);
     ampParams.decay   = juce::jmax(0.01f, params.decay);
     ampParams.sustain = juce::jlimit(0.0f, 1.0f, params.sustain);
     ampParams.release = juce::jmax(0.01f, params.release);
     ampEnv.setParameters(ampParams);
 
-    juce::dsp::ADSR::Parameters fParams;
+    juce::ADSR::Parameters fParams;
     fParams.attack  = juce::jmax(0.005f, params.attack * 0.8f);
     fParams.decay   = juce::jmax(0.02f, params.decay * 1.2f);
     fParams.sustain = 0.4f;

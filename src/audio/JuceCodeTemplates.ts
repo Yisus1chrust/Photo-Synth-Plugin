@@ -321,10 +321,37 @@ struct TemporalEraInfo
 {
     TemporalEra era { TemporalEra::Era1970s };
     juce::String eraLabel { "1970s Discrete Analog" };
+    juce::String label { "1970s Discrete Analog" };
     juce::String architecture { "Moog Ladder & Fender Rhodes" };
     juce::String description { "Warm, fat discrete analog synths & electric pianos" };
     float eraValue { 0.50f };
 };
+
+namespace photosynth
+{
+    using ::SynthArchetype;
+    using ::TemporalEra;
+    using ::TemporalEraInfo;
+
+    inline juce::String toEngineParamText(SynthArchetype archetype)
+    {
+        switch (archetype)
+        {
+            case SynthArchetype::AnalogBrass:
+                return "Analog Polyphonic Brass (Moog/OB-X Stack)";
+            case SynthArchetype::DigitalFmBells:
+                return "2-Op Glassy FM Bells (DX7 Spec)";
+            case SynthArchetype::HybridWavetable:
+            default:
+                return "High-Precision Digital Wavetable";
+        }
+    }
+}
+
+inline juce::String toEngineParamText(SynthArchetype archetype)
+{
+    return photosynth::toEngineParamText(archetype);
+}
 
 struct ImageAnalysisResult
 {

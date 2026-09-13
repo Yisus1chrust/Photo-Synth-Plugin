@@ -36,6 +36,32 @@ struct TemporalEraInfo
     float eraValue { 0.50f }; // 0.0 to 1.0 continuous spectrum
 };
 
+namespace photosynth
+{
+    using ::SynthArchetype;
+    using ::TemporalEra;
+    using ::TemporalEraInfo;
+
+    inline juce::String toEngineParamText(SynthArchetype archetype)
+    {
+        switch (archetype)
+        {
+            case SynthArchetype::AnalogBrass:
+                return "Analog Polyphonic Brass (Moog/OB-X Stack)";
+            case SynthArchetype::DigitalFmBells:
+                return "2-Op Glassy FM Bells (DX7 Spec)";
+            case SynthArchetype::HybridWavetable:
+            default:
+                return "High-Precision Digital Wavetable";
+        }
+    }
+}
+
+inline juce::String toEngineParamText(SynthArchetype archetype)
+{
+    return photosynth::toEngineParamText(archetype);
+}
+
 struct ImageAnalysisResult
 {
     juce::uint64 pixelSeed { 0 };

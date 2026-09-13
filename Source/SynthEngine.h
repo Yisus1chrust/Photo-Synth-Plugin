@@ -48,14 +48,18 @@ private:
     float currentVelocity { 0.8f };
     VoiceParams currentParams;
 
-    // Dual Oscillators + Sub
-    juce::dsp::Oscillator<float> osc1, osc2, subOsc;
-    juce::dsp::StateVariableTPTFilter<float> filter;
+    // Per-sample oscillator phase accumulators
+    float phase1 { 0.0f };
+    float phase2 { 0.0f };
+    float phaseSub { 0.0f };
+    float lfoPhase { 0.0f };
+
+    // 2-pole resonant stereo filter state
+    float filterS1[2] { 0.0f, 0.0f };
+    float filterS2[2] { 0.0f, 0.0f };
+
     juce::ADSR ampEnv;
     juce::ADSR filterEnv;
-
-    // LFO phase
-    float lfoPhase { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthVoice)
 };

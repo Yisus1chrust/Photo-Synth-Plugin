@@ -10,10 +10,6 @@
 
 SynthVoice::SynthVoice()
 {
-    // Initialize Oscillators with anti-aliasing waveshapes
-    osc1.initialise([](float x) { return std::sin(x); });
-    osc2.initialise([](float x) { return (x / juce::MathConstants<float>::pi); }); // Saw wave
-    subOsc.initialise([](float x) { return x < 0.0f ? -1.0f : 1.0f; });            // Square wave
 }
 
 bool SynthVoice::canPlaySound(juce::SynthesiserSound* sound)
@@ -21,66 +17,49 @@ bool SynthVoice::canPlaySound(juce::SynthesiserSound* sound)
     return dynamic_cast<PhotoSynthSound*>(sound) != nullptr;
 }
 
-void SynthVoice::prepare(double sampleRate, int samplesPerBlock)
+void SynthVoice::prepare(double sampleRate, int /*samplesPerBlock*/)
 {
-    currentSampleRate = sampleRate;
-    juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32)samplesPerBlock, 2 };
-
-    osc1.prepare(spec);
-    osc2.prepare(spec);
-    subOsc.prepare(spec);
-
-    filter.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
-    filter.prepare(spec);
-
-    ampEnv.setSampleRate(sampleRate);
-    filterEnv.setSampleRate(sampleRate);
+    currentSampleRate = (sampleRate > 1000.0) ? sampleRate : 44100.0;
+    ampEnv.setSampleRate(currentSampleRate);
+    filterEnv.setSampleRate(currentSampleRate);
+    filterS1[0] = filterS1[1] = 0.0f;
+    filterS2[0] = filterS2[1] = 0.0f;
 }
 
 void SynthVoice::updatePatch(const VoiceParams& params)
 {
     currentParams = params;
 
-    // Filter frequency & resonance
-    filter.setCutoffFrequency(juce::jlimit(20.0f, 20000.0f, params.cutoff));
-    filter.setResonance(juce::jlimit(0.1f, 10.0f, params.resonance));
-
     // ADSR settings
     juce::ADSR::Parameters ampParams;
-    ampParams.attack  = juce::jmax(0.001f, params.attack);
+    ampParams.attack  = juce::jmax(0.002f, params.attack);
     ampParams.decay   = juce::jmax(0.01f, params.decay);
-    ampParams.sustain = juce::jlimit(0.0f, 1.0f, params.sustain);
-    ampParams.release = juce::jmax(0.01f, params.release);
+    ampParams.sustain = juce::jlimit(0.05f, 1.0f, params.sustain);
+    ampParams.release = juce::jmax(0.02f, params.release);
     ampEnv.setParameters(ampParams);
 
     juce::ADSR::Parameters fParams;
     fParams.attack  = juce::jmax(0.005f, params.attack * 0.8f);
     fParams.decay   = juce::jmax(0.02f, params.decay * 1.2f);
-    fParams.sustain = 0.4f;
+    fParams.sustain = 0.5f;
     fParams.release = juce::jmax(0.02f, params.release * 0.8f);
     filterEnv.setParameters(fParams);
 }
 
 void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int)
 {
-    currentVelocity = velocity;
+    currentVelocity = juce::jlimit(0.1f, 1.0f, velocity);
     currentPitchHz = (float)juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
 
-    // Subtle archetype pitch & oscillator detune
-    float detuneRatio = 1.004f; // 7 cents spread
-    if (currentParams.archetype == SynthArchetype::DigitalFmBells) {
-        detuneRatio = 1.000f; // Pure crystalline tuning
-    } else if (currentParams.archetype == SynthArchetype::AnalogBrass) {
-        detuneRatio = 1.006f; // Fat analog spread
-    }
-
-    osc1.setFrequency(currentPitchHz);
-    osc2.setFrequency(currentPitchHz * detuneRatio);
-    subOsc.setFrequency(currentPitchHz * 0.5f); // 1 octave below
+    phase1 = 0.0f;
+    phase2 = 0.0f;
+    phaseSub = 0.0f;
+    lfoPhase = 0.0f;
+    filterS1[0] = filterS1[1] = 0.0f;
+    filterS2[0] = filterS2[1] = 0.0f;
 
     ampEnv.noteOn();
     filterEnv.noteOn();
-    lfoPhase = 0.0f;
 }
 
 void SynthVoice::stopNote(float, bool allowTailOff)
@@ -102,73 +81,109 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
 {
     if (!isVoiceActive()) return;
 
-    juce::AudioBuffer<float> voiceBuffer;
-    voiceBuffer.setSize(outputBuffer.getNumChannels(), numSamples, false, false, true);
-    voiceBuffer.clear();
+    int numChannels = outputBuffer.getNumChannels();
+    if (numChannels == 0 || numSamples == 0) return;
 
-    juce::dsp::AudioBlock<float> block(voiceBuffer);
-    juce::dsp::ProcessContextReplacing<float> context(block);
-
-    // Render oscillators
-    osc1.process(context);
-
-    // Blend in second oscillator & sub
-    juce::AudioBuffer<float> osc2Buffer;
-    osc2Buffer.setSize(outputBuffer.getNumChannels(), numSamples, false, false, true);
-    osc2Buffer.clear();
-    juce::dsp::AudioBlock<float> osc2Block(osc2Buffer);
-    juce::dsp::ProcessContextReplacing<float> osc2Context(osc2Block);
-    osc2.process(osc2Context);
-
-    // Apply oscillator mix based on archetype
-    float osc2Mix = 0.6f;
-    float subMix = 0.25f;
+    float detuneRatio = 1.005f;
     if (currentParams.archetype == SynthArchetype::DigitalFmBells) {
-        osc2Mix = 0.35f;
-        subMix = 0.1f;
+        detuneRatio = 1.0f;
     } else if (currentParams.archetype == SynthArchetype::AnalogBrass) {
-        osc2Mix = 0.85f;
-        subMix = 0.35f;
+        detuneRatio = 1.008f;
     }
 
-    for (int ch = 0; ch < outputBuffer.getNumChannels(); ++ch) {
-        voiceBuffer.addFrom(ch, 0, osc2Buffer, ch, 0, numSamples, osc2Mix);
-    }
-
-    // Process ladder filter
-    filter.process(context);
-
-    // Calculate LFO & Envelope per sample
+    float inc1 = currentPitchHz / (float)currentSampleRate;
+    float inc2 = (currentPitchHz * detuneRatio) / (float)currentSampleRate;
+    float incSub = (currentPitchHz * 0.5f) / (float)currentSampleRate;
     float lfoInc = (float)(2.0 * juce::MathConstants<double>::pi * currentParams.lfoRate / currentSampleRate);
 
-    for (int sample = 0; sample < numSamples; ++sample)
+    // SVF Filter parameters
+    float baseCutoff = juce::jlimit(40.0f, 19500.0f, currentParams.cutoff);
+    float q = juce::jlimit(0.5f, 9.5f, currentParams.resonance);
+
+    for (int i = 0; i < numSamples; ++i)
     {
         float envGain = ampEnv.getNextSample();
+        if (!ampEnv.isActive()) {
+            clearCurrentNote();
+            break;
+        }
+
         float fEnv = filterEnv.getNextSample();
         float lfoVal = std::sin(lfoPhase) * currentParams.lfoDepth;
         lfoPhase += lfoInc;
-        if (lfoPhase > juce::MathConstants<float>::twoPi) {
+        if (lfoPhase > juce::MathConstants<float>::twoPi)
             lfoPhase -= juce::MathConstants<float>::twoPi;
-        }
 
-        // Apply gain, velocity, LFO modulation, and filter envelope
-        float sampleGain = envGain * currentVelocity * (1.0f + lfoVal * 0.3f);
-
-        for (int channel = 0; channel < outputBuffer.getNumChannels(); ++channel)
+        // Render oscillator waveforms according to archetype
+        float oscSample = 0.0f;
+        if (currentParams.archetype == SynthArchetype::AnalogBrass)
         {
-            float s = voiceBuffer.getSample(channel, sample) * sampleGain * 0.25f;
-
-            // Soft saturation drive
-            if (currentParams.drive > 0.05f) {
-                float driven = s * (1.0f + currentParams.drive * 3.0f);
-                s = std::tanh(driven);
-            }
-
-            outputBuffer.addSample(channel, startSample + sample, s);
+            // Polyphonic dual saw + sub square
+            float saw1 = 2.0f * phase1 - 1.0f;
+            float saw2 = 2.0f * phase2 - 1.0f;
+            float sqSub = (phaseSub < 0.5f) ? 0.8f : -0.8f;
+            oscSample = saw1 * 0.45f + saw2 * 0.40f + sqSub * 0.25f;
         }
-    }
+        else if (currentParams.archetype == SynthArchetype::DigitalFmBells)
+        {
+            // 2-Op FM Bells (Carrier modulated by ratio modulator)
+            float mod = std::sin(phase2 * juce::MathConstants<float>::twoPi) * 2.5f;
+            float carrier = std::sin((phase1 + mod * 0.08f) * juce::MathConstants<float>::twoPi);
+            float bellSub = std::sin(phaseSub * juce::MathConstants<float>::twoPi);
+            oscSample = carrier * 0.70f + bellSub * 0.30f;
+        }
+        else
+        {
+            // Hybrid Wavetable: Sine/Tri blend + bright saw
+            float tri1 = (phase1 < 0.5f ? 4.0f * phase1 - 1.0f : 3.0f - 4.0f * phase1);
+            float saw2 = 2.0f * phase2 - 1.0f;
+            oscSample = tri1 * 0.50f + saw2 * 0.45f;
+        }
 
-    if (!ampEnv.isActive()) {
-        clearCurrentNote();
+        // Advance phases
+        phase1 += inc1;
+        if (phase1 >= 1.0f) phase1 -= 1.0f;
+        phase2 += inc2;
+        if (phase2 >= 1.0f) phase2 -= 1.0f;
+        phaseSub += incSub;
+        if (phaseSub >= 1.0f) phaseSub -= 1.0f;
+
+        // Apply dynamic cutoff modulation
+        float modCutoff = juce::jlimit(40.0f, 19500.0f, baseCutoff * (0.6f + fEnv * 0.8f) * (1.0f + lfoVal * 0.25f));
+        float g = std::tan(juce::MathConstants<float>::pi * modCutoff / (float)currentSampleRate);
+        float k = 1.0f / q;
+        float a1 = 1.0f / (1.0f + g * (g + k));
+        float a2 = g * a1;
+        float a3 = g * a2;
+
+        // Stereo 2-pole SVF filter calculation
+        float outL = 0.0f;
+        float outR = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            float v3 = oscSample - filterS2[ch];
+            float v1 = a1 * filterS1[ch] + a2 * v3;
+            float v2 = filterS2[ch] + a2 * filterS1[ch] + a3 * v3;
+            filterS1[ch] = 2.0f * v1 - filterS1[ch];
+            filterS2[ch] = 2.0f * v2 - filterS2[ch];
+            if (ch == 0) outL = v2; else outR = v2;
+        }
+
+        // Voice envelope and velocity scaling
+        float voiceGain = envGain * currentVelocity * 0.50f;
+        float sampleL = outL * voiceGain;
+        float sampleR = outR * voiceGain;
+
+        // Soft saturation drive
+        if (currentParams.drive > 0.01f) {
+            float driveAmount = 1.0f + currentParams.drive * 3.5f;
+            sampleL = std::tanh(sampleL * driveAmount);
+            sampleR = std::tanh(sampleR * driveAmount);
+        }
+
+        outputBuffer.addSample(0, startSample + i, sampleL);
+        if (numChannels > 1) {
+            outputBuffer.addSample(1, startSample + i, sampleR);
+        }
     }
 }

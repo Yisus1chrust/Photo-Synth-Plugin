@@ -75,6 +75,19 @@ struct ImageAnalysisResult
 
     SynthArchetype archetype { SynthArchetype::AnalogBrass };
     TemporalEraInfo temporalEra;
+
+    // Derived Audio Synthesis Parameters matching Web Prototype ImageAnalyzer
+    float cutoff { 2000.0f };
+    float resonance { 1.0f };
+    float attack { 0.01f };
+    float decay { 0.5f };
+    float sustain { 0.7f };
+    float release { 0.3f };
+    float lfoRate { 2.0f };
+    float lfoDepth { 0.2f };
+    float drive { 0.0f };
+    float delayMix { 0.2f };
+    float reverbMix { 0.3f };
 };
 
 class ImageAnalyzer

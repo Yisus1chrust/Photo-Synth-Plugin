@@ -406,7 +406,6 @@ void VirtualPianoKeyboard::paint(juce::Graphics& g)
 LogoComponent::LogoComponent()
 {
     setMouseCursor(juce::MouseCursor::PointingHandCursor);
-    setTooltip("Modular Sound Technologies - Click to Export VST3 & AU");
 }
 
 void LogoComponent::mouseUp(const juce::MouseEvent&)

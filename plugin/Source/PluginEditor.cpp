@@ -833,10 +833,38 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     addAndMakeVisible (slotABox);
     addAndMakeVisible (morphSlider);
     addAndMakeVisible (slotBBox);
+    addAndMakeVisible (bpmBtn);
     addAndMakeVisible (presetBox);
     addAndMakeVisible (savePresetBtn);
     addAndMakeVisible (effectsBtn);
     addAndMakeVisible (deepDiveBtn);
+
+    // BPM Button & interactive popup tempo changer
+    bpmBtn.setTooltip ("Tempo BPM - Click to change tempo (20 - 300 BPM)");
+    bpmBtn.setButtonText (juce::String(juce::roundToInt(audioProcessor.getBpm())) + " BPM");
+    bpmBtn.onClick = [this] {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("TEMPO BPM");
+        int currentBpmInt = juce::roundToInt(audioProcessor.getBpm());
+        int commonBpms[] = { 60, 75, 80, 90, 100, 110, 120, 128, 130, 140, 150, 160, 175 };
+        for (int b : commonBpms) {
+            menu.addItem (b, juce::String(b) + " BPM", true, (b == currentBpmInt));
+        }
+        menu.addSeparator();
+        menu.addItem (999, "+5 BPM", true, false);
+        menu.addItem (998, "-5 BPM", true, false);
+
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&bpmBtn), [this](int result) {
+            if (result >= 20 && result <= 300) {
+                audioProcessor.setBpm ((float)result);
+            } else if (result == 999) {
+                audioProcessor.setBpm (juce::jmin(300.0f, audioProcessor.getBpm() + 5.0f));
+            } else if (result == 998) {
+                audioProcessor.setBpm (juce::jmax(20.0f, audioProcessor.getBpm() - 5.0f));
+            }
+            bpmBtn.setButtonText (juce::String(juce::roundToInt(audioProcessor.getBpm())) + " BPM");
+        });
+    };
 
     // Auto Sweep Morph Toggle Button
     autoSweepBtn.onClick = [this] {
@@ -885,6 +913,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     morphAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "morph", morphSlider);
     morphSlider.onValueChange = [this] {
+        audioProcessor.updateParametersFromAnalysis();
         updateEraText();
         repaint();
     };
@@ -896,9 +925,17 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
         if (id >= 1 && id <= 4) {
             audioProcessor.loadSlotAPreset(id - 1);
             audioProcessor.loadSlotBPreset((id) % 4);
-            morphSlider.setValue(0.0);
+            if (auto* param = audioProcessor.apvts.getParameter("morph"))
+                param->setValueNotifyingHost(0.0f);
+            morphSlider.setValue(0.0, juce::dontSendNotification);
             slotABox.setSelectedId(id, juce::dontSendNotification);
             slotBBox.setSelectedId(((id) % 4) + 1, juce::dontSendNotification);
+            audioProcessor.updateParametersFromAnalysis();
+        } else if (id >= 100) {
+            int userIndex = id - 100;
+            audioProcessor.loadUserPresetByIndex(userIndex);
+            float currentMorph = *audioProcessor.apvts.getRawParameterValue("morph");
+            morphSlider.setValue(currentMorph, juce::dontSendNotification);
         }
         updateEraText();
         repaint();
@@ -909,7 +946,14 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
         savePresetModal = std::make_unique<SavePresetModalComponent>(
             audioProcessor,
             [this] { savePresetModal.reset(); repaint(); },
-            [this](const juce::String&) { refreshPresetDropdown(); }
+            [this](const juce::String& savedName) {
+                refreshPresetDropdown();
+                auto names = audioProcessor.getUserPresetNames();
+                int idx = names.indexOf(savedName);
+                if (idx >= 0)
+                    presetBox.setSelectedId(100 + idx, juce::dontSendNotification);
+                repaint();
+            }
         );
         addAndMakeVisible (*savePresetModal);
         savePresetModal->setBounds (getLocalBounds());
@@ -1106,6 +1150,7 @@ void PhotoSynthAudioEditor::timerCallback()
     audioProcessor.getScopeData (scopeData, 256);
     oscilloscope.pushData (scopeData, 256);
 
+    bpmBtn.setButtonText (juce::String(juce::roundToInt(audioProcessor.getBpm())) + " BPM");
     updateEraText();
 }
 
@@ -1248,6 +1293,7 @@ void PhotoSynthAudioEditor::resized()
     morphSlider.setBounds (264, subY, 120, 26);
     slotBBox.setBounds (392, subY, 130, 26);
 
+    bpmBtn.setBounds (getWidth() - 295, subY, 78, 26);
     presetBox.setBounds (getWidth() - 210, subY, 140, 26);
     savePresetBtn.setBounds (getWidth() - 65, subY, 55, 26);
 

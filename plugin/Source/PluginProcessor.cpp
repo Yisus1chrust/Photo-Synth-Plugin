@@ -27,6 +27,9 @@ PhotoSynthAudioProcessor::PhotoSynthAudioProcessor()
 
     updateMorphState();
     updateBlendedImage();
+    applyAnalysisToParameters(currentAnalysis);
+
+    loadUserPresetsFromDisk();
 }
 
 PhotoSynthAudioProcessor::~PhotoSynthAudioProcessor() {}
@@ -34,6 +37,10 @@ PhotoSynthAudioProcessor::~PhotoSynthAudioProcessor() {}
 juce::AudioProcessorValueTreeState::ParameterLayout PhotoSynthAudioProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    // Tempo BPM
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "bpm", 1 }, "Tempo BPM", juce::NormalisableRange<float> (20.0f, 300.0f, 1.0f), 120.0f));
 
     // Filter Cutoff & Resonance
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
@@ -162,6 +169,40 @@ void PhotoSynthAudioProcessor::releaseResources()
     effectsChain.reset();
 }
 
+void PhotoSynthAudioProcessor::setBpm(float newBpm)
+{
+    currentBpm = juce::jlimit(20.0f, 300.0f, newBpm);
+    if (auto* param = apvts.getParameter("bpm")) {
+        param->setValueNotifyingHost(param->convertTo0to1(currentBpm));
+    }
+}
+
+void PhotoSynthAudioProcessor::applyAnalysisToParameters(const ImageAnalysisResult& analysis)
+{
+    auto setParam = [this](const juce::String& paramId, float value) {
+        if (auto* param = apvts.getParameter(paramId)) {
+            param->setValueNotifyingHost(param->convertTo0to1(value));
+        }
+    };
+
+    setParam("cutoff",    analysis.cutoff);
+    setParam("resonance", analysis.resonance);
+    setParam("lfoRate",   analysis.lfoRate);
+    setParam("lfoDepth",  analysis.lfoDepth);
+    setParam("attack",    analysis.attack);
+    setParam("decay",     analysis.decay);
+    setParam("sustain",   analysis.sustain);
+    setParam("release",   analysis.release);
+    setParam("drive",     analysis.drive);
+    setParam("delayMix",  analysis.delayMix);
+    setParam("reverbMix", analysis.reverbMix);
+}
+
+void PhotoSynthAudioProcessor::updateParametersFromAnalysis()
+{
+    applyAnalysisToParameters(currentAnalysis);
+}
+
 void PhotoSynthAudioProcessor::loadSlotAImage(const juce::Image& img, const juce::String& name)
 {
     imageSlotA = img;
@@ -169,6 +210,7 @@ void PhotoSynthAudioProcessor::loadSlotAImage(const juce::Image& img, const juce
     analysisSlotA = ImageAnalyzer::analyzeImage(img);
     updateMorphState();
     updateBlendedImage();
+    updateParametersFromAnalysis();
 }
 
 void PhotoSynthAudioProcessor::loadSlotBImage(const juce::Image& img, const juce::String& name)
@@ -178,6 +220,7 @@ void PhotoSynthAudioProcessor::loadSlotBImage(const juce::Image& img, const juce
     analysisSlotB = ImageAnalyzer::analyzeImage(img);
     updateMorphState();
     updateBlendedImage();
+    updateParametersFromAnalysis();
 }
 
 void PhotoSynthAudioProcessor::loadSlotAPreset(int presetIndex)
@@ -187,6 +230,7 @@ void PhotoSynthAudioProcessor::loadSlotAPreset(int presetIndex)
     analysisSlotA = ImageAnalyzer::analyzeImage(imageSlotA);
     updateMorphState();
     updateBlendedImage();
+    updateParametersFromAnalysis();
 }
 
 void PhotoSynthAudioProcessor::loadSlotBPreset(int presetIndex)
@@ -196,6 +240,7 @@ void PhotoSynthAudioProcessor::loadSlotBPreset(int presetIndex)
     analysisSlotB = ImageAnalyzer::analyzeImage(imageSlotB);
     updateMorphState();
     updateBlendedImage();
+    updateParametersFromAnalysis();
 }
 
 void PhotoSynthAudioProcessor::updateMorphState()
@@ -276,6 +321,15 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 {
     buffer.clear();
 
+    // Sync BPM from DAW playhead transport if available
+    if (auto* playHead = getPlayHead()) {
+        if (auto pos = playHead->getPosition()) {
+            if (auto hostBpm = pos->getBpm()) {
+                currentBpm = juce::jlimit(20.0f, 300.0f, (float)*hostBpm);
+            }
+        }
+    }
+
     // Merge internal UI MIDI events
     {
         const juce::ScopedLock sl(midiLock);
@@ -288,24 +342,15 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     updateMorphState();
 
     VoiceParams p;
-    float userCutoffScale = *apvts.getRawParameterValue("cutoff") / 2500.0f;
-    float userResScale    = *apvts.getRawParameterValue("resonance") / 1.0f;
-    float userAttScale    = *apvts.getRawParameterValue("attack") / 0.01f;
-    float userDecScale    = *apvts.getRawParameterValue("decay") / 0.8f;
-    float userSusScale    = *apvts.getRawParameterValue("sustain") / 0.7f;
-    float userRelScale    = *apvts.getRawParameterValue("release") / 0.4f;
-    float userLfoRScale   = *apvts.getRawParameterValue("lfoRate") / 2.0f;
-    float userLfoDScale   = *apvts.getRawParameterValue("lfoDepth") / 0.2f;
-
-    p.cutoff    = juce::jlimit(20.0f, 20000.0f, currentAnalysis.cutoff * userCutoffScale);
-    p.resonance = juce::jlimit(0.1f, 10.0f, currentAnalysis.resonance * userResScale);
-    p.lfoRate   = juce::jlimit(0.1f, 20.0f, currentAnalysis.lfoRate * userLfoRScale);
-    p.lfoDepth  = juce::jlimit(0.0f, 1.0f, currentAnalysis.lfoDepth * userLfoDScale);
-    p.attack    = juce::jlimit(0.001f, 5.0f, currentAnalysis.attack * userAttScale);
-    p.decay     = juce::jlimit(0.01f, 10.0f, currentAnalysis.decay * userDecScale);
-    p.sustain   = juce::jlimit(0.05f, 1.0f, currentAnalysis.sustain * userSusScale);
-    p.release   = juce::jlimit(0.01f, 10.0f, currentAnalysis.release * userRelScale);
-    p.drive     = currentAnalysis.drive;
+    p.cutoff    = *apvts.getRawParameterValue("cutoff");
+    p.resonance = *apvts.getRawParameterValue("resonance");
+    p.lfoRate   = *apvts.getRawParameterValue("lfoRate");
+    p.lfoDepth  = *apvts.getRawParameterValue("lfoDepth");
+    p.attack    = *apvts.getRawParameterValue("attack");
+    p.decay     = *apvts.getRawParameterValue("decay");
+    p.sustain   = *apvts.getRawParameterValue("sustain");
+    p.release   = *apvts.getRawParameterValue("release");
+    p.drive     = *apvts.getRawParameterValue("drive");
     p.archetype = currentAnalysis.archetype;
     p.era       = currentAnalysis.temporalEra.era;
 
@@ -387,21 +432,140 @@ void PhotoSynthAudioProcessor::getScopeData(float* destination, int numSamples)
     }
 }
 
-void PhotoSynthAudioProcessor::saveCurrentPreset(const juce::String& name, const juce::String&)
+static juce::File getPresetsXmlFile()
 {
-    if (name.isNotEmpty() && !userPresetNames.contains(name)) {
-        userPresetNames.add(name);
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                    .getChildFile("ModularSoundTechnologies")
+                    .getChildFile("PhotoSynth");
+    if (!dir.exists())
+        dir.createDirectory();
+    return dir.getChildFile("user_presets.xml");
+}
+
+void PhotoSynthAudioProcessor::saveCurrentPreset(const juce::String& name, const juce::String& desc)
+{
+    if (name.isEmpty()) return;
+
+    UserPreset preset;
+    preset.name = name;
+    preset.description = desc;
+    preset.imageA = imageSlotA;
+    preset.imageB = imageSlotB;
+    preset.slotAName = slotAName;
+    preset.slotBName = slotBName;
+    preset.xmlState = apvts.copyState().createXml();
+
+    int existingIdx = -1;
+    for (size_t i = 0; i < userPresets.size(); ++i) {
+        if (userPresets[i].name == name) {
+            existingIdx = (int)i;
+            break;
+        }
     }
+
+    if (existingIdx >= 0) {
+        userPresets[(size_t)existingIdx] = std::move(preset);
+    } else {
+        userPresets.push_back(std::move(preset));
+        if (!userPresetNames.contains(name))
+            userPresetNames.add(name);
+    }
+
+    saveUserPresetsToDisk();
 }
 
 juce::StringArray PhotoSynthAudioProcessor::getUserPresetNames() const
 {
-    return userPresetNames;
+    juce::StringArray names;
+    for (const auto& p : userPresets)
+        names.add(p.name);
+    return names;
 }
 
-void PhotoSynthAudioProcessor::loadUserPreset(const juce::String&)
+void PhotoSynthAudioProcessor::loadUserPresetByIndex(int index)
 {
-    // Preset recall from saved state
+    if (index < 0 || index >= (int)userPresets.size()) return;
+    const auto& preset = userPresets[(size_t)index];
+
+    if (preset.imageA.isValid()) {
+        imageSlotA = preset.imageA;
+        slotAName = preset.slotAName;
+        analysisSlotA = ImageAnalyzer::analyzeImage(imageSlotA);
+    }
+    if (preset.imageB.isValid()) {
+        imageSlotB = preset.imageB;
+        slotBName = preset.slotBName;
+        analysisSlotB = ImageAnalyzer::analyzeImage(imageSlotB);
+    }
+
+    if (preset.xmlState != nullptr) {
+        apvts.replaceState(juce::ValueTree::fromXml(*preset.xmlState));
+    }
+
+    updateMorphState();
+    updateBlendedImage();
+}
+
+void PhotoSynthAudioProcessor::loadUserPreset(const juce::String& name)
+{
+    for (size_t i = 0; i < userPresets.size(); ++i) {
+        if (userPresets[i].name == name) {
+            loadUserPresetByIndex((int)i);
+            break;
+        }
+    }
+}
+
+void PhotoSynthAudioProcessor::saveUserPresetsToDisk()
+{
+    auto file = getPresetsXmlFile();
+    juce::XmlElement root("PhotoSynthUserPresets");
+
+    for (const auto& p : userPresets) {
+        auto* pXml = root.createNewChildElement("Preset");
+        pXml->setAttribute("name", p.name);
+        pXml->setAttribute("description", p.description);
+        pXml->setAttribute("slotAName", p.slotAName);
+        pXml->setAttribute("slotBName", p.slotBName);
+
+        if (p.xmlState != nullptr) {
+            auto* stateElem = pXml->createNewChildElement("State");
+            stateElem->addChildElement(new juce::XmlElement(*p.xmlState));
+        }
+    }
+
+    root.writeTo(file);
+}
+
+void PhotoSynthAudioProcessor::loadUserPresetsFromDisk()
+{
+    auto file = getPresetsXmlFile();
+    if (!file.existsAsFile()) return;
+
+    auto xml = juce::XmlDocument::parse(file);
+    if (xml == nullptr || !xml->hasTagName("PhotoSynthUserPresets")) return;
+
+    userPresets.clear();
+    userPresetNames.clear();
+
+    for (auto* pXml : xml->getChildIterator()) {
+        if (pXml->hasTagName("Preset")) {
+            UserPreset p;
+            p.name = pXml->getStringAttribute("name");
+            p.description = pXml->getStringAttribute("description");
+            p.slotAName = pXml->getStringAttribute("slotAName");
+            p.slotBName = pXml->getStringAttribute("slotBName");
+
+            if (auto* stateElem = pXml->getChildByName("State")) {
+                if (auto* firstChild = stateElem->getFirstChildElement()) {
+                    p.xmlState = std::make_unique<juce::XmlElement>(*firstChild);
+                }
+            }
+
+            userPresetNames.add(p.name);
+            userPresets.push_back(std::move(p));
+        }
+    }
 }
 
 juce::AudioProcessorEditor* PhotoSynthAudioProcessor::createEditor()

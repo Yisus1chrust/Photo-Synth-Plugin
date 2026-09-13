@@ -223,6 +223,7 @@ private:
 
     juce::ComboBox presetBox;
     juce::TextButton savePresetBtn { "SAVE" };
+    juce::TextButton bpmBtn { "120 BPM" };
     juce::TextButton effectsBtn { "EFFECTS" };
     juce::TextButton deepDiveBtn { "DEEP DIVE" };
 

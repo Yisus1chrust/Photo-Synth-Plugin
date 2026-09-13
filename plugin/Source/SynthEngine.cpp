@@ -54,6 +54,7 @@ void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::Synthesiser
     phase1 = 0.0f;
     phase2 = 0.0f;
     phaseSub = 0.0f;
+    phaseMod = 0.0f;
     lfoPhase = 0.0f;
     filterS1[0] = filterS1[1] = 0.0f;
     filterS2[0] = filterS2[1] = 0.0f;
@@ -84,19 +85,20 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
     int numChannels = outputBuffer.getNumChannels();
     if (numChannels == 0 || numSamples == 0) return;
 
-    float detuneRatio = 1.005f;
+    float detuneRatio = 1.009f;
     if (currentParams.archetype == SynthArchetype::DigitalFmBells) {
         detuneRatio = 1.0f;
     } else if (currentParams.archetype == SynthArchetype::AnalogBrass) {
-        detuneRatio = 1.008f;
+        detuneRatio = 1.009f;
     }
 
     float inc1 = currentPitchHz / (float)currentSampleRate;
     float inc2 = (currentPitchHz * detuneRatio) / (float)currentSampleRate;
     float incSub = (currentPitchHz * 0.5f) / (float)currentSampleRate;
+    float incMod = (currentPitchHz * 3.0f) / (float)currentSampleRate;
     float lfoInc = (float)(2.0 * juce::MathConstants<double>::pi * currentParams.lfoRate / currentSampleRate);
 
-    // SVF Filter parameters
+    // SVF Filter parameters: directly from analyzed/overridden cutoff
     float baseCutoff = juce::jlimit(40.0f, 19500.0f, currentParams.cutoff);
     float q = juce::jlimit(0.5f, 9.5f, currentParams.resonance);
 
@@ -118,26 +120,26 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         float oscSample = 0.0f;
         if (currentParams.archetype == SynthArchetype::AnalogBrass)
         {
-            // Polyphonic dual saw + sub square
+            // Polyphonic dual detuned saw + sub square
             float saw1 = 2.0f * phase1 - 1.0f;
             float saw2 = 2.0f * phase2 - 1.0f;
-            float sqSub = (phaseSub < 0.5f) ? 0.8f : -0.8f;
+            float sqSub = (phaseSub < 0.5f) ? 0.7f : -0.7f;
             oscSample = saw1 * 0.45f + saw2 * 0.40f + sqSub * 0.25f;
         }
         else if (currentParams.archetype == SynthArchetype::DigitalFmBells)
         {
-            // 2-Op FM Bells (Carrier modulated by ratio modulator)
-            float mod = std::sin(phase2 * juce::MathConstants<float>::twoPi) * 2.5f;
-            float carrier = std::sin((phase1 + mod * 0.08f) * juce::MathConstants<float>::twoPi);
+            // 2-Op FM Bells (Modulator at 3:1 ratio with dynamic decay envelope)
+            float mod = std::sin(phaseMod * juce::MathConstants<float>::twoPi) * (1.0f + fEnv * 4.0f);
+            float carrier = std::sin((phase1 + mod * 0.35f) * juce::MathConstants<float>::twoPi);
             float bellSub = std::sin(phaseSub * juce::MathConstants<float>::twoPi);
-            oscSample = carrier * 0.70f + bellSub * 0.30f;
+            oscSample = carrier * 0.75f + bellSub * 0.25f;
         }
         else
         {
-            // Hybrid Wavetable: Sine/Tri blend + bright saw
+            // Hybrid Wavetable: Triangle / Saw blend
             float tri1 = (phase1 < 0.5f ? 4.0f * phase1 - 1.0f : 3.0f - 4.0f * phase1);
             float saw2 = 2.0f * phase2 - 1.0f;
-            oscSample = tri1 * 0.50f + saw2 * 0.45f;
+            oscSample = tri1 * 0.50f + saw2 * 0.50f;
         }
 
         // Advance phases
@@ -147,6 +149,8 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         if (phase2 >= 1.0f) phase2 -= 1.0f;
         phaseSub += incSub;
         if (phaseSub >= 1.0f) phaseSub -= 1.0f;
+        phaseMod += incMod;
+        if (phaseMod >= 1.0f) phaseMod -= 1.0f;
 
         // Apply dynamic cutoff modulation
         float modCutoff = juce::jlimit(40.0f, 19500.0f, baseCutoff * (0.6f + fEnv * 0.8f) * (1.0f + lfoVal * 0.25f));

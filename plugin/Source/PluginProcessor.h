@@ -70,9 +70,31 @@ public:
     void allNotesOff();
 
     // Preset save / load helpers
+    struct UserPreset
+    {
+        juce::String name;
+        juce::String description;
+        juce::Image imageA;
+        juce::Image imageB;
+        juce::String slotAName;
+        juce::String slotBName;
+        std::unique_ptr<juce::XmlElement> xmlState;
+    };
+
     void saveCurrentPreset(const juce::String& name, const juce::String& desc = {});
     juce::StringArray getUserPresetNames() const;
     void loadUserPreset(const juce::String& name);
+    void loadUserPresetByIndex(int index);
+    void saveUserPresetsToDisk();
+    void loadUserPresetsFromDisk();
+
+    // Analysis and parameters synchronization
+    void updateParametersFromAnalysis();
+    void applyAnalysisToParameters(const ImageAnalysisResult& analysis);
+
+    // BPM Support
+    float getBpm() const { return currentBpm; }
+    void setBpm(float newBpm);
 
 private:
     juce::Synthesiser synth;
@@ -101,7 +123,9 @@ private:
     void updateMorphState();
     void updateBlendedImage();
 
+    float currentBpm { 120.0f };
     juce::StringArray userPresetNames;
+    std::vector<UserPreset> userPresets;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhotoSynthAudioProcessor)
 };

@@ -45,6 +45,8 @@ target_sources(PhotoSynth PRIVATE
     plugin/Source/EffectsChain.h
     plugin/Source/EffectsChain.cpp
     plugin/Source/PresetFactory.h
+    plugin/Source/LogoBinaryData.h
+    plugin/Source/LogoBinaryData.cpp
     plugin/Source/PluginProcessor.h
     plugin/Source/PluginProcessor.cpp
     plugin/Source/PluginEditor.h

@@ -7,6 +7,7 @@
 */
 
 #include "PluginEditor.h"
+#include "LogoBinaryData.h"
 
 // -----------------------------------------------------------------------------
 // 1. Radial Gauge Component
@@ -406,6 +407,7 @@ void VirtualPianoKeyboard::paint(juce::Graphics& g)
 LogoComponent::LogoComponent()
 {
     setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    logoImage = photosynth::LogoBinaryData::getLogoImage();
 }
 
 void LogoComponent::mouseUp(const juce::MouseEvent&)
@@ -436,7 +438,7 @@ void LogoComponent::paint(juce::Graphics& g)
     g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff27272a));
     g.drawRect(bounds, isHovered ? 2.0f : 1.5f);
 
-    // Inner card with subtle radial highlight
+    // Inner card with subtle radial highlight matching web app
     auto inner = bounds.reduced(5.0f);
     juce::ColourGradient rad(
         isHovered ? juce::Colour(0x55f59e0b) : juce::Colour(0x33ffffff), inner.getCentreX(), inner.getCentreY(),
@@ -448,31 +450,153 @@ void LogoComponent::paint(juce::Graphics& g)
     g.setColour(isHovered ? juce::Colour(0xaaeab308) : juce::Colour(0x44ffffff));
     g.drawRoundedRectangle(inner, 4.0f, 1.0f);
 
-    // Vector 'M' emblem with soundwave bars
-    float cx = inner.getCentreX();
-    float cy = inner.getCentreY() - 6.0f;
+    // Draw user custom logo image centered inside inner bounds
+    if (logoImage.isValid()) {
+        auto logoBounds = inner.reduced(3.0f);
+        if (isHovered)
+            logoBounds = logoBounds.expanded(1.0f);
+        g.drawImage(logoImage, logoBounds, juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
+    } else {
+        // Fallback vector 'M' emblem with soundwave bars
+        float cx = inner.getCentreX();
+        float cy = inner.getCentreY() - 6.0f;
 
-    g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff22d3ee));
-    juce::Path mPath;
-    mPath.startNewSubPath(cx - 16.0f, cy + 10.0f);
-    mPath.lineTo(cx - 16.0f, cy - 10.0f);
-    mPath.lineTo(cx - 8.0f, cy + 2.0f);
-    mPath.lineTo(cx, cy - 10.0f);
-    mPath.lineTo(cx + 8.0f, cy + 2.0f);
-    mPath.lineTo(cx + 16.0f, cy - 10.0f);
-    mPath.lineTo(cx + 16.0f, cy + 10.0f);
-    g.strokePath(mPath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff22d3ee));
+        juce::Path mPath;
+        mPath.startNewSubPath(cx - 16.0f, cy + 10.0f);
+        mPath.lineTo(cx - 16.0f, cy - 10.0f);
+        mPath.lineTo(cx - 8.0f, cy + 2.0f);
+        mPath.lineTo(cx, cy - 10.0f);
+        mPath.lineTo(cx + 8.0f, cy + 2.0f);
+        mPath.lineTo(cx + 16.0f, cy - 10.0f);
+        mPath.lineTo(cx + 16.0f, cy + 10.0f);
+        g.strokePath(mPath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    // Subtitle text
-    g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xffa1a1aa));
-    g.setFont(juce::Font(7.0f, juce::Font::bold));
-    g.drawText("MODULAR SOUND", 0, (int)(inner.getBottom() - 17.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
-    g.drawText("TECHNOLOGIES", 0, (int)(inner.getBottom() - 10.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+        g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xffa1a1aa));
+        g.setFont(juce::Font(7.0f, juce::Font::bold));
+        g.drawText("MODULAR SOUND", 0, (int)(inner.getBottom() - 17.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+        g.drawText("TECHNOLOGIES", 0, (int)(inner.getBottom() - 10.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+    }
 
     if (isHovered) {
         g.setColour(juce::Colour(0xffeab308));
         g.setFont(juce::Font(6.5f, juce::Font::bold));
         g.drawText("[ EXPORT VST ]", 0, (int)(inner.getBottom() - 3.0f), (int)bounds.getWidth(), 7, juce::Justification::centred);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 4b. Interactive Editable BPM Component
+// -----------------------------------------------------------------------------
+BpmEditorComponent::BpmEditorComponent(PhotoSynthAudioProcessor& proc)
+    : processor(proc)
+{
+    addAndMakeVisible(bpmLabel);
+    bpmLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    bpmLabel.setJustificationType(juce::Justification::centred);
+    bpmLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    bpmLabel.setColour(juce::Label::textColourId, juce::Colour(0xff22d3ee));
+    bpmLabel.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+    bpmLabel.setEditable(true, true, false);
+    bpmLabel.setTooltip("Click to type custom BPM (20 - 300) · Right-click for common tempos");
+
+    bpmLabel.onEditorShow = [this] {
+        if (auto* te = bpmLabel.getCurrentTextEditor()) {
+            te->setText(juce::String(juce::roundToInt(processor.getBpm())), false);
+            te->selectAll();
+            te->setInputRestrictions(5, "0123456789.");
+            te->setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff09090b));
+            te->setColour(juce::TextEditor::textColourId, juce::Colour(0xff22d3ee));
+            te->setColour(juce::TextEditor::highlightColourId, juce::Colour(0x6622d3ee));
+            te->setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff22d3ee));
+            te->setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xff38bdf8));
+        }
+    };
+
+    bpmLabel.onTextChange = [this] {
+        auto txt = bpmLabel.getText().trim();
+        if (txt.endsWithIgnoreCase("BPM"))
+            txt = txt.dropLastCharacters(3).trim();
+        float val = txt.getFloatValue();
+        if (val >= 20.0f && val <= 300.0f) {
+            processor.setBpm(val);
+        }
+        updateText();
+    };
+
+    bpmLabel.onEditorHide = [this] {
+        updateText();
+    };
+
+    bpmLabel.addMouseListener(this, false);
+
+    updateText();
+}
+
+void BpmEditorComponent::updateText()
+{
+    if (!bpmLabel.isBeingEdited()) {
+        bpmLabel.setText(juce::String(juce::roundToInt(processor.getBpm())) + " BPM", juce::dontSendNotification);
+    }
+}
+
+void BpmEditorComponent::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xff18181b));
+    g.fillRoundedRectangle(bounds, 3.0f);
+    g.setColour(isHovered ? juce::Colour(0xff22d3ee) : juce::Colour(0xff3f3f46));
+    g.drawRoundedRectangle(bounds, 3.0f, 1.0f);
+}
+
+void BpmEditorComponent::resized()
+{
+    bpmLabel.setBounds(getLocalBounds());
+}
+
+void BpmEditorComponent::mouseEnter(const juce::MouseEvent&)
+{
+    isHovered = true;
+    repaint();
+}
+
+void BpmEditorComponent::mouseExit(const juce::MouseEvent&)
+{
+    isHovered = false;
+    repaint();
+}
+
+void BpmEditorComponent::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu()) {
+        juce::PopupMenu menu;
+        menu.addSectionHeader("TEMPO BPM");
+        int currentBpmInt = juce::roundToInt(processor.getBpm());
+        int commonBpms[] = { 60, 75, 80, 90, 100, 110, 120, 128, 130, 140, 150, 160, 175 };
+        for (int b : commonBpms) {
+            menu.addItem(b, juce::String(b) + " BPM", true, (b == currentBpmInt));
+        }
+        menu.addSeparator();
+        menu.addItem(999, "Type Custom BPM...");
+        menu.addItem(998, "+5 BPM");
+        menu.addItem(997, "-5 BPM");
+
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [this](int result) {
+            if (result >= 20 && result <= 300) {
+                processor.setBpm((float)result);
+                updateText();
+            } else if (result == 999) {
+                bpmLabel.showEditor();
+            } else if (result == 998) {
+                processor.setBpm(juce::jmin(300.0f, processor.getBpm() + 5.0f));
+                updateText();
+            } else if (result == 997) {
+                processor.setBpm(juce::jmax(20.0f, processor.getBpm() - 5.0f));
+                updateText();
+            }
+        });
+    } else {
+        bpmLabel.showEditor();
     }
 }
 
@@ -833,38 +957,11 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     addAndMakeVisible (slotABox);
     addAndMakeVisible (morphSlider);
     addAndMakeVisible (slotBBox);
-    addAndMakeVisible (bpmBtn);
+    addAndMakeVisible (bpmBox);
     addAndMakeVisible (presetBox);
     addAndMakeVisible (savePresetBtn);
     addAndMakeVisible (effectsBtn);
     addAndMakeVisible (deepDiveBtn);
-
-    // BPM Button & interactive popup tempo changer
-    bpmBtn.setTooltip ("Tempo BPM - Click to change tempo (20 - 300 BPM)");
-    bpmBtn.setButtonText (juce::String(juce::roundToInt(audioProcessor.getBpm())) + " BPM");
-    bpmBtn.onClick = [this] {
-        juce::PopupMenu menu;
-        menu.addSectionHeader ("TEMPO BPM");
-        int currentBpmInt = juce::roundToInt(audioProcessor.getBpm());
-        int commonBpms[] = { 60, 75, 80, 90, 100, 110, 120, 128, 130, 140, 150, 160, 175 };
-        for (int b : commonBpms) {
-            menu.addItem (b, juce::String(b) + " BPM", true, (b == currentBpmInt));
-        }
-        menu.addSeparator();
-        menu.addItem (999, "+5 BPM", true, false);
-        menu.addItem (998, "-5 BPM", true, false);
-
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&bpmBtn), [this](int result) {
-            if (result >= 20 && result <= 300) {
-                audioProcessor.setBpm ((float)result);
-            } else if (result == 999) {
-                audioProcessor.setBpm (juce::jmin(300.0f, audioProcessor.getBpm() + 5.0f));
-            } else if (result == 998) {
-                audioProcessor.setBpm (juce::jmax(20.0f, audioProcessor.getBpm() - 5.0f));
-            }
-            bpmBtn.setButtonText (juce::String(juce::roundToInt(audioProcessor.getBpm())) + " BPM");
-        });
-    };
 
     // Auto Sweep Morph Toggle Button
     autoSweepBtn.onClick = [this] {
@@ -1150,7 +1247,7 @@ void PhotoSynthAudioEditor::timerCallback()
     audioProcessor.getScopeData (scopeData, 256);
     oscilloscope.pushData (scopeData, 256);
 
-    bpmBtn.setButtonText (juce::String(juce::roundToInt(audioProcessor.getBpm())) + " BPM");
+    bpmBox.updateText();
     updateEraText();
 }
 
@@ -1293,7 +1390,7 @@ void PhotoSynthAudioEditor::resized()
     morphSlider.setBounds (264, subY, 120, 26);
     slotBBox.setBounds (392, subY, 130, 26);
 
-    bpmBtn.setBounds (getWidth() - 295, subY, 78, 26);
+    bpmBox.setBounds (getWidth() - 295, subY, 78, 26);
     presetBox.setBounds (getWidth() - 210, subY, 140, 26);
     savePresetBtn.setBounds (getWidth() - 65, subY, 55, 26);
 

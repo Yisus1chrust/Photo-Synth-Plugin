@@ -488,8 +488,8 @@ void LogoComponent::paint(juce::Graphics& g)
 // -----------------------------------------------------------------------------
 // 4b. Interactive Editable BPM Component
 // -----------------------------------------------------------------------------
-BpmEditorComponent::BpmEditorComponent(PhotoSynthAudioProcessor& proc)
-    : processor(proc)
+BpmEditorComponent::BpmEditorComponent()
+    : processor(nullptr)
 {
     addAndMakeVisible(bpmLabel);
     bpmLabel.setFont(juce::Font(11.0f, juce::Font::bold));
@@ -502,7 +502,8 @@ BpmEditorComponent::BpmEditorComponent(PhotoSynthAudioProcessor& proc)
 
     bpmLabel.onEditorShow = [this] {
         if (auto* te = bpmLabel.getCurrentTextEditor()) {
-            te->setText(juce::String(juce::roundToInt(processor.getBpm())), false);
+            float bpmVal = processor != nullptr ? processor->getBpm() : 120.0f;
+            te->setText(juce::String(juce::roundToInt(bpmVal)), false);
             te->selectAll();
             te->setInputRestrictions(5, "0123456789.");
             te->setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff09090b));
@@ -519,7 +520,8 @@ BpmEditorComponent::BpmEditorComponent(PhotoSynthAudioProcessor& proc)
             txt = txt.dropLastCharacters(3).trim();
         float val = txt.getFloatValue();
         if (val >= 20.0f && val <= 300.0f) {
-            processor.setBpm(val);
+            if (processor != nullptr)
+                processor->setBpm(val);
         }
         updateText();
     };
@@ -533,10 +535,24 @@ BpmEditorComponent::BpmEditorComponent(PhotoSynthAudioProcessor& proc)
     updateText();
 }
 
+BpmEditorComponent::BpmEditorComponent(PhotoSynthAudioProcessor& proc)
+    : BpmEditorComponent()
+{
+    processor = &proc;
+    updateText();
+}
+
+void BpmEditorComponent::setProcessor(PhotoSynthAudioProcessor& proc)
+{
+    processor = &proc;
+    updateText();
+}
+
 void BpmEditorComponent::updateText()
 {
     if (!bpmLabel.isBeingEdited()) {
-        bpmLabel.setText(juce::String(juce::roundToInt(processor.getBpm())) + " BPM", juce::dontSendNotification);
+        float bpmVal = processor != nullptr ? processor->getBpm() : 120.0f;
+        bpmLabel.setText(juce::String(juce::roundToInt(bpmVal)) + " BPM", juce::dontSendNotification);
     }
 }
 
@@ -571,7 +587,7 @@ void BpmEditorComponent::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isPopupMenu()) {
         juce::PopupMenu menu;
         menu.addSectionHeader("TEMPO BPM");
-        int currentBpmInt = juce::roundToInt(processor.getBpm());
+        int currentBpmInt = processor != nullptr ? juce::roundToInt(processor->getBpm()) : 120;
         int commonBpms[] = { 60, 75, 80, 90, 100, 110, 120, 128, 130, 140, 150, 160, 175 };
         for (int b : commonBpms) {
             menu.addItem(b, juce::String(b) + " BPM", true, (b == currentBpmInt));
@@ -582,17 +598,21 @@ void BpmEditorComponent::mouseDown(const juce::MouseEvent& e)
         menu.addItem(997, "-5 BPM");
 
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [this](int result) {
-            if (result >= 20 && result <= 300) {
-                processor.setBpm((float)result);
-                updateText();
+            if (processor != nullptr) {
+                if (result >= 20 && result <= 300) {
+                    processor->setBpm((float)result);
+                    updateText();
+                } else if (result == 999) {
+                    bpmLabel.showEditor();
+                } else if (result == 998) {
+                    processor->setBpm(juce::jmin(300.0f, processor->getBpm() + 5.0f));
+                    updateText();
+                } else if (result == 997) {
+                    processor->setBpm(juce::jmax(20.0f, processor->getBpm() - 5.0f));
+                    updateText();
+                }
             } else if (result == 999) {
                 bpmLabel.showEditor();
-            } else if (result == 998) {
-                processor.setBpm(juce::jmin(300.0f, processor.getBpm() + 5.0f));
-                updateText();
-            } else if (result == 997) {
-                processor.setBpm(juce::jmax(20.0f, processor.getBpm() - 5.0f));
-                updateText();
             }
         });
     } else {
@@ -937,7 +957,7 @@ void ExportModalComponent::resized()
 // 9. Main Plugin Editor
 // -----------------------------------------------------------------------------
 PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p), pianoKeyboard(p)
+    : AudioProcessorEditor (&p), audioProcessor (p), bpmBox (p), pianoKeyboard (p)
 {
     setLookAndFeel (&customLookAndFeel);
     setWantsKeyboardFocus(true);

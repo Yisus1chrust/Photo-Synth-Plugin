@@ -94,6 +94,29 @@ public:
     std::function<void()> onClick;
 
 private:
+    juce::Image logoImage;
+    bool isHovered { false };
+};
+
+// 4b. Interactive Editable BPM Component
+class BpmEditorComponent : public juce::Component
+{
+public:
+    BpmEditorComponent();
+    BpmEditorComponent(PhotoSynthAudioProcessor& proc);
+    void setProcessor(PhotoSynthAudioProcessor& proc);
+
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+    void mouseEnter(const juce::MouseEvent&) override;
+    void mouseExit(const juce::MouseEvent&) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void updateText();
+    juce::Label& getLabel() { return bpmLabel; }
+
+private:
+    PhotoSynthAudioProcessor* processor { nullptr };
+    juce::Label bpmLabel;
     bool isHovered { false };
 };
 
@@ -223,6 +246,7 @@ private:
 
     juce::ComboBox presetBox;
     juce::TextButton savePresetBtn { "SAVE" };
+    BpmEditorComponent bpmBox;
     juce::TextButton effectsBtn { "EFFECTS" };
     juce::TextButton deepDiveBtn { "DEEP DIVE" };
 

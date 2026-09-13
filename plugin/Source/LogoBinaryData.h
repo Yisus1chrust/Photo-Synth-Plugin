@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <juce_core/juce_core.h>
 #include <juce_graphics/juce_graphics.h>
 
 namespace photosynth {

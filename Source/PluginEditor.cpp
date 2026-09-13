@@ -7,6 +7,7 @@
 */
 
 #include "PluginEditor.h"
+#include "LogoBinaryData.h"
 
 // -----------------------------------------------------------------------------
 // 1. Radial Gauge Component
@@ -406,6 +407,7 @@ void VirtualPianoKeyboard::paint(juce::Graphics& g)
 LogoComponent::LogoComponent()
 {
     setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    logoImage = photosynth::LogoBinaryData::getLogoImage();
 }
 
 void LogoComponent::mouseUp(const juce::MouseEvent&)
@@ -436,7 +438,7 @@ void LogoComponent::paint(juce::Graphics& g)
     g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff27272a));
     g.drawRect(bounds, isHovered ? 2.0f : 1.5f);
 
-    // Inner card with subtle radial highlight
+    // Inner card with subtle radial highlight matching web app
     auto inner = bounds.reduced(5.0f);
     juce::ColourGradient rad(
         isHovered ? juce::Colour(0x55f59e0b) : juce::Colour(0x33ffffff), inner.getCentreX(), inner.getCentreY(),
@@ -448,31 +450,173 @@ void LogoComponent::paint(juce::Graphics& g)
     g.setColour(isHovered ? juce::Colour(0xaaeab308) : juce::Colour(0x44ffffff));
     g.drawRoundedRectangle(inner, 4.0f, 1.0f);
 
-    // Vector 'M' emblem with soundwave bars
-    float cx = inner.getCentreX();
-    float cy = inner.getCentreY() - 6.0f;
+    // Draw user custom logo image centered inside inner bounds
+    if (logoImage.isValid()) {
+        auto logoBounds = inner.reduced(3.0f);
+        if (isHovered)
+            logoBounds = logoBounds.expanded(1.0f);
+        g.drawImage(logoImage, logoBounds, juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
+    } else {
+        // Fallback vector 'M' emblem with soundwave bars
+        float cx = inner.getCentreX();
+        float cy = inner.getCentreY() - 6.0f;
 
-    g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff22d3ee));
-    juce::Path mPath;
-    mPath.startNewSubPath(cx - 16.0f, cy + 10.0f);
-    mPath.lineTo(cx - 16.0f, cy - 10.0f);
-    mPath.lineTo(cx - 8.0f, cy + 2.0f);
-    mPath.lineTo(cx, cy - 10.0f);
-    mPath.lineTo(cx + 8.0f, cy + 2.0f);
-    mPath.lineTo(cx + 16.0f, cy - 10.0f);
-    mPath.lineTo(cx + 16.0f, cy + 10.0f);
-    g.strokePath(mPath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff22d3ee));
+        juce::Path mPath;
+        mPath.startNewSubPath(cx - 16.0f, cy + 10.0f);
+        mPath.lineTo(cx - 16.0f, cy - 10.0f);
+        mPath.lineTo(cx - 8.0f, cy + 2.0f);
+        mPath.lineTo(cx, cy - 10.0f);
+        mPath.lineTo(cx + 8.0f, cy + 2.0f);
+        mPath.lineTo(cx + 16.0f, cy - 10.0f);
+        mPath.lineTo(cx + 16.0f, cy + 10.0f);
+        g.strokePath(mPath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    // Subtitle text
-    g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xffa1a1aa));
-    g.setFont(juce::Font(7.0f, juce::Font::bold));
-    g.drawText("MODULAR SOUND", 0, (int)(inner.getBottom() - 17.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
-    g.drawText("TECHNOLOGIES", 0, (int)(inner.getBottom() - 10.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+        g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xffa1a1aa));
+        g.setFont(juce::Font(7.0f, juce::Font::bold));
+        g.drawText("MODULAR SOUND", 0, (int)(inner.getBottom() - 17.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+        g.drawText("TECHNOLOGIES", 0, (int)(inner.getBottom() - 10.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+    }
 
     if (isHovered) {
         g.setColour(juce::Colour(0xffeab308));
         g.setFont(juce::Font(6.5f, juce::Font::bold));
         g.drawText("[ EXPORT VST ]", 0, (int)(inner.getBottom() - 3.0f), (int)bounds.getWidth(), 7, juce::Justification::centred);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 4b. Interactive Editable BPM Component
+// -----------------------------------------------------------------------------
+BpmEditorComponent::BpmEditorComponent()
+    : processor(nullptr)
+{
+    addAndMakeVisible(bpmLabel);
+    bpmLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    bpmLabel.setJustificationType(juce::Justification::centred);
+    bpmLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    bpmLabel.setColour(juce::Label::textColourId, juce::Colour(0xff22d3ee));
+    bpmLabel.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+    bpmLabel.setEditable(true, true, false);
+    bpmLabel.setTooltip("Click to type custom BPM (20 - 300) · Right-click for common tempos");
+
+    bpmLabel.onEditorShow = [this] {
+        if (auto* te = bpmLabel.getCurrentTextEditor()) {
+            float bpmVal = processor != nullptr ? processor->getBpm() : 120.0f;
+            te->setText(juce::String(juce::roundToInt(bpmVal)), false);
+            te->selectAll();
+            te->setInputRestrictions(5, "0123456789.");
+            te->setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff09090b));
+            te->setColour(juce::TextEditor::textColourId, juce::Colour(0xff22d3ee));
+            te->setColour(juce::TextEditor::highlightColourId, juce::Colour(0x6622d3ee));
+            te->setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff22d3ee));
+            te->setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xff38bdf8));
+        }
+    };
+
+    bpmLabel.onTextChange = [this] {
+        auto txt = bpmLabel.getText().trim();
+        if (txt.endsWithIgnoreCase("BPM"))
+            txt = txt.dropLastCharacters(3).trim();
+        float val = txt.getFloatValue();
+        if (val >= 20.0f && val <= 300.0f) {
+            if (processor != nullptr)
+                processor->setBpm(val);
+        }
+        updateText();
+    };
+
+    bpmLabel.onEditorHide = [this] {
+        updateText();
+    };
+
+    bpmLabel.addMouseListener(this, false);
+
+    updateText();
+}
+
+BpmEditorComponent::BpmEditorComponent(PhotoSynthAudioProcessor& proc)
+    : BpmEditorComponent()
+{
+    processor = &proc;
+    updateText();
+}
+
+void BpmEditorComponent::setProcessor(PhotoSynthAudioProcessor& proc)
+{
+    processor = &proc;
+    updateText();
+}
+
+void BpmEditorComponent::updateText()
+{
+    if (!bpmLabel.isBeingEdited()) {
+        float bpmVal = processor != nullptr ? processor->getBpm() : 120.0f;
+        bpmLabel.setText(juce::String(juce::roundToInt(bpmVal)) + " BPM", juce::dontSendNotification);
+    }
+}
+
+void BpmEditorComponent::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xff18181b));
+    g.fillRoundedRectangle(bounds, 3.0f);
+    g.setColour(isHovered ? juce::Colour(0xff22d3ee) : juce::Colour(0xff3f3f46));
+    g.drawRoundedRectangle(bounds, 3.0f, 1.0f);
+}
+
+void BpmEditorComponent::resized()
+{
+    bpmLabel.setBounds(getLocalBounds());
+}
+
+void BpmEditorComponent::mouseEnter(const juce::MouseEvent&)
+{
+    isHovered = true;
+    repaint();
+}
+
+void BpmEditorComponent::mouseExit(const juce::MouseEvent&)
+{
+    isHovered = false;
+    repaint();
+}
+
+void BpmEditorComponent::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu()) {
+        juce::PopupMenu menu;
+        menu.addSectionHeader("TEMPO BPM");
+        int currentBpmInt = processor != nullptr ? juce::roundToInt(processor->getBpm()) : 120;
+        int commonBpms[] = { 60, 75, 80, 90, 100, 110, 120, 128, 130, 140, 150, 160, 175 };
+        for (int b : commonBpms) {
+            menu.addItem(b, juce::String(b) + " BPM", true, (b == currentBpmInt));
+        }
+        menu.addSeparator();
+        menu.addItem(999, "Type Custom BPM...");
+        menu.addItem(998, "+5 BPM");
+        menu.addItem(997, "-5 BPM");
+
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [this](int result) {
+            if (processor != nullptr) {
+                if (result >= 20 && result <= 300) {
+                    processor->setBpm((float)result);
+                    updateText();
+                } else if (result == 999) {
+                    bpmLabel.showEditor();
+                } else if (result == 998) {
+                    processor->setBpm(juce::jmin(300.0f, processor->getBpm() + 5.0f));
+                    updateText();
+                } else if (result == 997) {
+                    processor->setBpm(juce::jmax(20.0f, processor->getBpm() - 5.0f));
+                    updateText();
+                }
+            } else if (result == 999) {
+                bpmLabel.showEditor();
+            }
+        });
+    } else {
+        bpmLabel.showEditor();
     }
 }
 
@@ -813,7 +957,7 @@ void ExportModalComponent::resized()
 // 9. Main Plugin Editor
 // -----------------------------------------------------------------------------
 PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p), pianoKeyboard(p)
+    : AudioProcessorEditor (&p), audioProcessor (p), bpmBox (p), pianoKeyboard (p)
 {
     setLookAndFeel (&customLookAndFeel);
     setWantsKeyboardFocus(true);
@@ -833,6 +977,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     addAndMakeVisible (slotABox);
     addAndMakeVisible (morphSlider);
     addAndMakeVisible (slotBBox);
+    addAndMakeVisible (bpmBox);
     addAndMakeVisible (presetBox);
     addAndMakeVisible (savePresetBtn);
     addAndMakeVisible (effectsBtn);
@@ -885,6 +1030,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     morphAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "morph", morphSlider);
     morphSlider.onValueChange = [this] {
+        audioProcessor.updateParametersFromAnalysis();
         updateEraText();
         repaint();
     };
@@ -896,9 +1042,17 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
         if (id >= 1 && id <= 4) {
             audioProcessor.loadSlotAPreset(id - 1);
             audioProcessor.loadSlotBPreset((id) % 4);
-            morphSlider.setValue(0.0);
+            if (auto* param = audioProcessor.apvts.getParameter("morph"))
+                param->setValueNotifyingHost(0.0f);
+            morphSlider.setValue(0.0, juce::dontSendNotification);
             slotABox.setSelectedId(id, juce::dontSendNotification);
             slotBBox.setSelectedId(((id) % 4) + 1, juce::dontSendNotification);
+            audioProcessor.updateParametersFromAnalysis();
+        } else if (id >= 100) {
+            int userIndex = id - 100;
+            audioProcessor.loadUserPresetByIndex(userIndex);
+            float currentMorph = *audioProcessor.apvts.getRawParameterValue("morph");
+            morphSlider.setValue(currentMorph, juce::dontSendNotification);
         }
         updateEraText();
         repaint();
@@ -909,7 +1063,14 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
         savePresetModal = std::make_unique<SavePresetModalComponent>(
             audioProcessor,
             [this] { savePresetModal.reset(); repaint(); },
-            [this](const juce::String&) { refreshPresetDropdown(); }
+            [this](const juce::String& savedName) {
+                refreshPresetDropdown();
+                auto names = audioProcessor.getUserPresetNames();
+                int idx = names.indexOf(savedName);
+                if (idx >= 0)
+                    presetBox.setSelectedId(100 + idx, juce::dontSendNotification);
+                repaint();
+            }
         );
         addAndMakeVisible (*savePresetModal);
         savePresetModal->setBounds (getLocalBounds());
@@ -1106,6 +1267,7 @@ void PhotoSynthAudioEditor::timerCallback()
     audioProcessor.getScopeData (scopeData, 256);
     oscilloscope.pushData (scopeData, 256);
 
+    bpmBox.updateText();
     updateEraText();
 }
 
@@ -1248,6 +1410,7 @@ void PhotoSynthAudioEditor::resized()
     morphSlider.setBounds (264, subY, 120, 26);
     slotBBox.setBounds (392, subY, 130, 26);
 
+    bpmBox.setBounds (getWidth() - 295, subY, 78, 26);
     presetBox.setBounds (getWidth() - 210, subY, 140, 26);
     savePresetBtn.setBounds (getWidth() - 65, subY, 55, 26);
 

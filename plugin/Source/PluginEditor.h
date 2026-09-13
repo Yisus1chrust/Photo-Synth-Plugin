@@ -102,7 +102,10 @@ private:
 class BpmEditorComponent : public juce::Component
 {
 public:
+    BpmEditorComponent();
     BpmEditorComponent(PhotoSynthAudioProcessor& proc);
+    void setProcessor(PhotoSynthAudioProcessor& proc);
+
     void paint(juce::Graphics& g) override;
     void resized() override;
     void mouseEnter(const juce::MouseEvent&) override;
@@ -112,7 +115,7 @@ public:
     juce::Label& getLabel() { return bpmLabel; }
 
 private:
-    PhotoSynthAudioProcessor& processor;
+    PhotoSynthAudioProcessor* processor { nullptr };
     juce::Label bpmLabel;
     bool isHovered { false };
 };

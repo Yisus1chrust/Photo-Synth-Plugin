@@ -1,3 +1,10 @@
+/*
+  ==============================================================================
+    EffectsChain.cpp
+    Modular Sound Technologies - Photo Synth
+  ==============================================================================
+*/
+
 #include "EffectsChain.h"
 
 namespace photosynth
@@ -22,54 +29,51 @@ namespace photosynth
         flanger.reset();
     }
 
-    void EffectsChain::updateFromPatch(const PatchParameters& patch, double)
+    void EffectsChain::updateParameters(const EffectsParameters& params)
     {
-        const auto& fx = patch.effects;
+        currentParams = params;
 
-        const float dP1 = fx.delay.param1;
-        const float dP2 = fx.delay.param2;
-        const float timeSec = 0.05f + dP1 * 0.75f;
+        // Delay setup
+        float timeSec = juce::jlimit(0.01f, 2.0f, params.delayTimeMs * 0.001f);
         delayTimeSamples = timeSec * sampleRate;
-        delayFeedback = fx.delay.enabled ? dP2 * 0.85f : 0.0f;
-        delayMix = fx.delay.enabled ? juce::jmax(patch.delayMix, dP1 * 0.5f) : 0.0f;
 
+        // Reverb setup
         juce::Reverb::Parameters rv;
-        rv.roomSize = juce::jlimit(0.0f, 1.0f, fx.reverb.param2);
-        rv.damping = juce::jlimit(0.0f, 1.0f, patch.physicalModel.spatialReflection.absorption);
-        rv.wetLevel = fx.reverb.enabled ? juce::jmax(patch.reverbMix, fx.reverb.param1 * 0.8f) : 0.0f;
-        rv.dryLevel = 1.0f;
-        rv.width = 0.8f;
+        rv.roomSize   = juce::jlimit(0.0f, 1.0f, params.reverbRoomSize);
+        rv.damping    = 0.4f;
+        rv.wetLevel   = params.reverbEnabled ? params.reverbMix : 0.0f;
+        rv.dryLevel   = 1.0f;
+        rv.width      = 0.9f;
         rv.freezeMode = 0.0f;
         reverb.setParameters(rv);
 
-        chorus.setRate(0.05f + fx.chorus.param1 * 8.0f);
-        chorus.setDepth(juce::jlimit(0.0f, 1.0f, fx.chorus.param2));
+        // Chorus setup
+        chorus.setRate(juce::jlimit(0.1f, 10.0f, params.chorusRateHz));
+        chorus.setDepth(juce::jlimit(0.0f, 1.0f, params.chorusDepth));
         chorus.setCentreDelay(7.0f);
-        chorus.setFeedback(0.0f);
-        chorus.setMix(fx.chorus.enabled ? fx.chorus.intensity * 0.45f : 0.0f);
+        chorus.setFeedback(0.15f);
+        chorus.setMix(params.chorusEnabled ? params.chorusMix : 0.0f);
 
-        phaser.setRate(0.05f + fx.phaser.param1 * 6.0f);
-        phaser.setDepth(fx.phaser.enabled ? fx.phaser.param2 : 0.0f);
-        phaser.setCentreFrequency(300.0f + fx.phaser.param2 * 2600.0f);
-        phaser.setFeedback(0.1f);
-        phaser.setMix(fx.phaser.enabled ? fx.phaser.param2 * 0.45f : 0.0f);
+        // Phaser setup
+        phaser.setRate(juce::jlimit(0.1f, 8.0f, params.phaserRateHz));
+        phaser.setDepth(params.phaserEnabled ? params.phaserDepth : 0.0f);
+        phaser.setCentreFrequency(600.0f);
+        phaser.setFeedback(juce::jlimit(0.0f, 0.8f, params.phaserFeedback));
+        phaser.setMix(params.phaserEnabled ? params.phaserMix : 0.0f);
 
-        flanger.setRate(0.05f + fx.flanger.param1 * 6.0f);
-        flanger.setDepth(fx.flanger.enabled ? fx.flanger.param2 : 0.0f);
-        flanger.setCentreDelay(2.0f + fx.flanger.param1 * 6.0f);
-        flanger.setFeedback(juce::jlimit(-0.95f, 0.95f, fx.flanger.param2 * 0.85f));
-        flanger.setMix(fx.flanger.enabled ? fx.flanger.param2 * 0.45f : 0.0f);
-
-        distortionDrive = 20.0f + (fx.distortion.param1 * 60.0f);
-        distortionMix = fx.distortion.enabled ? fx.distortion.param1 * 0.4f : 0.0f;
+        // Flanger setup
+        flanger.setRate(juce::jlimit(0.05f, 5.0f, params.flangerRateHz));
+        flanger.setDepth(params.flangerEnabled ? params.flangerDepth : 0.0f);
+        flanger.setCentreDelay(3.0f);
+        flanger.setFeedback(0.4f);
+        flanger.setMix(params.flangerEnabled ? params.flangerMix : 0.0f);
     }
 
     float EffectsChain::processDistortionSample(float x) const
     {
-        const float k = juce::jmax(1.0f, distortionDrive);
-        const float deg = juce::MathConstants<float>::pi / 180.0f;
-        const float raw = ((3.0f + k) * x * 20.0f * deg) / (juce::MathConstants<float>::pi + k * std::abs(x));
-        return juce::jlimit(-0.85f, 0.85f, raw * 0.45f);
+        float drive = 1.0f + currentParams.distortionDrive * 15.0f;
+        float driven = x * drive;
+        return std::tanh(driven);
     }
 
     void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer)
@@ -77,36 +81,57 @@ namespace photosynth
         if (buffer.getNumSamples() == 0)
             return;
 
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        int numCh = buffer.getNumChannels();
+        int numSamples = buffer.getNumSamples();
+
+        // 1. Distortion (if enabled)
+        if (currentParams.distortionEnabled && currentParams.distortionMix > 0.001f)
         {
-            auto* dry = buffer.getWritePointer(ch);
-            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            float mix = currentParams.distortionMix;
+            for (int ch = 0; ch < numCh; ++ch)
             {
-                const float delayed = delayLine.popSample(ch, delayTimeSamples, true);
-                delayLine.pushSample(ch, dry[i] + delayed * delayFeedback);
-                dry[i] = dry[i] * (1.0f - delayMix) + delayed * delayMix;
-            }
-        }
-
-        juce::dsp::AudioBlock<float> block(buffer);
-        juce::dsp::ProcessContextReplacing<float> context(block);
-
-        chorus.process(context);
-        phaser.process(context);
-        flanger.process(context);
-        reverb.process(context);
-
-        if (distortionMix > 0.0f)
-        {
-            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            {
-                auto* out = buffer.getWritePointer(ch);
-                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                auto* channelData = buffer.getWritePointer(ch);
+                for (int i = 0; i < numSamples; ++i)
                 {
-                    const float d = processDistortionSample(out[i]);
-                    out[i] = out[i] * (1.0f - distortionMix) + d * distortionMix;
+                    float dry = channelData[i];
+                    float wet = processDistortionSample(dry);
+                    channelData[i] = dry * (1.0f - mix) + wet * mix;
                 }
             }
         }
+
+        // 2. Stereo Delay (if enabled)
+        if (currentParams.delayEnabled && currentParams.delayMix > 0.001f)
+        {
+            float mix = currentParams.delayMix;
+            float fb = currentParams.delayFeedback;
+
+            for (int ch = 0; ch < numCh; ++ch)
+            {
+                auto* dry = buffer.getWritePointer(ch);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    float delayed = delayLine.popSample(ch, delayTimeSamples, true);
+                    delayLine.pushSample(ch, dry[i] + delayed * fb);
+                    dry[i] = dry[i] * (1.0f - mix) + delayed * mix;
+                }
+            }
+        }
+
+        // 3. Modulation Effects & Reverb
+        juce::dsp::AudioBlock<float> block(buffer);
+        juce::dsp::ProcessContextReplacing<float> context(block);
+
+        if (currentParams.chorusEnabled)
+            chorus.process(context);
+
+        if (currentParams.phaserEnabled)
+            phaser.process(context);
+
+        if (currentParams.flangerEnabled)
+            flanger.process(context);
+
+        if (currentParams.reverbEnabled)
+            reverb.process(context);
     }
 }

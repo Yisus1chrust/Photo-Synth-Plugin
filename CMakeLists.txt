@@ -42,6 +42,9 @@ target_sources(PhotoSynth PRIVATE
     plugin/Source/ImageAnalyzer.cpp
     plugin/Source/SynthEngine.h
     plugin/Source/SynthEngine.cpp
+    plugin/Source/EffectsChain.h
+    plugin/Source/EffectsChain.cpp
+    plugin/Source/PresetFactory.h
     plugin/Source/PluginProcessor.h
     plugin/Source/PluginProcessor.cpp
     plugin/Source/PluginEditor.h

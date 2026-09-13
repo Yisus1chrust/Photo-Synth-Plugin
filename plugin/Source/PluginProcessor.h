@@ -11,6 +11,8 @@
 #include <juce_dsp/juce_dsp.h>
 #include "ImageAnalyzer.h"
 #include "SynthEngine.h"
+#include "EffectsChain.h"
+#include "PresetFactory.h"
 
 class PhotoSynthAudioProcessor : public juce::AudioProcessor
 {
@@ -39,9 +41,22 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
-    void loadSlotAImage(const juce::Image& img);
-    void loadSlotBImage(const juce::Image& img);
+    // Image Slot Loading & Morphing
+    void loadSlotAImage(const juce::Image& img, const juce::String& name = {});
+    void loadSlotBImage(const juce::Image& img, const juce::String& name = {});
+    void loadSlotAPreset(int presetIndex);
+    void loadSlotBPreset(int presetIndex);
+
+    juce::Image getImageA() const { return imageSlotA; }
+    juce::Image getImageB() const { return imageSlotB; }
+    juce::Image getBlendedImage();
+
+    juce::String getSlotAName() const { return slotAName; }
+    juce::String getSlotBName() const { return slotBName; }
+
     ImageAnalysisResult getLatestAnalysis() const { return currentAnalysis; }
+    ImageAnalysisResult getAnalysisA() const { return analysisSlotA; }
+    ImageAnalysisResult getAnalysisB() const { return analysisSlotB; }
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -49,14 +64,33 @@ public:
     static constexpr int scopeBufferSize = 512;
     void getScopeData(float* destination, int numSamples);
 
+    // Keyboard trigger helper for UI virtual piano
+    void noteOn(int midiNoteNumber, float velocity);
+    void noteOff(int midiNoteNumber);
+    void allNotesOff();
+
+    // Preset save / load helpers
+    void saveCurrentPreset(const juce::String& name, const juce::String& desc = {});
+    juce::StringArray getUserPresetNames() const;
+    void loadUserPreset(const juce::String& name);
+
 private:
     juce::Synthesiser synth;
+    juce::MidiBuffer internalMidiBuffer;
+    juce::CriticalSection midiLock;
+
+    juce::Image imageSlotA;
+    juce::Image imageSlotB;
+    juce::Image blendedImage;
+    juce::String slotAName { "Synthwave Sunset" };
+    juce::String slotBName { "Obsidian Crypt" };
+
     ImageAnalysisResult analysisSlotA;
     ImageAnalysisResult analysisSlotB;
     ImageAnalysisResult currentAnalysis;
 
+    photosynth::EffectsChain effectsChain;
     juce::dsp::Limiter<float> masterLimiter;
-    juce::dsp::Chorus<float> masterChorus;
 
     // Thread-safe Scope FIFO
     float scopeBuffer[scopeBufferSize] { 0.0f };
@@ -65,6 +99,9 @@ private:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void updateMorphState();
+    void updateBlendedImage();
+
+    juce::StringArray userPresetNames;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhotoSynthAudioProcessor)
 };

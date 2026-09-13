@@ -2,145 +2,730 @@
   ==============================================================================
     PluginEditor.cpp
     Modular Sound Technologies - Photo Synth
+    100% 1:1 Accurate Layout & Features matching Web Prototype
   ==============================================================================
 */
 
-#include "PluginProcessor.h"
 #include "PluginEditor.h"
 
 // -----------------------------------------------------------------------------
-// RadialGaugeComponent Implementation
+// 1. Radial Gauge Component
 // -----------------------------------------------------------------------------
 RadialGaugeComponent::RadialGaugeComponent(const juce::String& labelText, juce::Colour ringColor)
-    : label(labelText), color(ringColor) {}
+    : label(labelText), color(ringColor)
+{
+}
 
 void RadialGaugeComponent::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat().reduced(4.0f);
-    float radius = juce::jmin(bounds.getWidth(), bounds.getHeight() - 16.0f) / 2.0f;
-    auto center = juce::Point<float>(bounds.getCentreX(), bounds.getY() + radius + 2.0f);
+    auto center = bounds.getCentre();
+    float radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.48f;
 
-    // Dark background ring
-    g.setColour(juce::Colour(0xff18181b));
+    // Outer dark circular card
+    g.setColour(juce::Colour(0xff121215));
     g.fillEllipse(center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f);
     g.setColour(juce::Colour(0xff27272a));
     g.drawEllipse(center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f, 1.2f);
 
-    // Active Value Arc
-    float startAngle = juce::MathConstants<float>::pi * 0.75f;
-    float endAngle = startAngle + targetValue * (juce::MathConstants<float>::pi * 1.5f);
-    juce::Path arc;
-    arc.addCentredArc(center.x, center.y, radius - 3.0f, radius - 3.0f, 0.0f, startAngle, endAngle, true);
+    // Track arc
+    float arcRadius = radius - 5.0f;
+    float startAngle = -juce::MathConstants<float>::pi * 0.75f;
+    float endAngle = juce::MathConstants<float>::pi * 0.75f;
+
+    juce::Path trackPath;
+    trackPath.addCentredArc(center.x, center.y, arcRadius, arcRadius, 0.0f, startAngle, endAngle, true);
+    g.setColour(juce::Colour(0xff1f242e));
+    g.strokePath(trackPath, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // Filled arc
+    float currentAngle = startAngle + juce::jlimit(0.0f, 1.0f, targetValue) * (endAngle - startAngle);
+    juce::Path filledPath;
+    filledPath.addCentredArc(center.x, center.y, arcRadius, arcRadius, 0.0f, startAngle, currentAngle, true);
     g.setColour(color);
-    g.strokePath(arc, juce::PathStrokeType(3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.strokePath(filledPath, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    // Value percentage text
-    g.setColour(juce::Colours::white);
+    // Value percentage text in center
+    g.setColour(juce::Colour(0xfff4f4f5));
     g.setFont(juce::Font(13.0f, juce::Font::bold));
-    g.drawText(juce::String(std::round(targetValue * 100.0f)) + "%",
-               juce::Rectangle<float>(center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f),
-               juce::Justification::centred);
+    int pct = juce::roundToInt(targetValue * 100.0f);
+    g.drawText(juce::String(pct) + "%", (int)(center.x - radius), (int)(center.y - 12.0f), (int)(radius * 2.0f), 16, juce::Justification::centred);
 
-    // Label below
-    g.setColour(juce::Colour(0xffa1a1aa));
-    g.setFont(juce::Font(10.0f, juce::Font::bold));
-    g.drawText(label, getLocalBounds().removeFromBottom(14), juce::Justification::centred);
+    // Label under percentage
+    g.setColour(color.brighter(0.2f));
+    g.setFont(juce::Font(9.0f, juce::Font::bold));
+    g.drawText(label, (int)(center.x - radius), (int)(center.y + 4.0f), (int)(radius * 2.0f), 12, juce::Justification::centred);
 }
 
 // -----------------------------------------------------------------------------
-// OscilloscopeComponent Implementation
+// 2. Oscilloscope Component
 // -----------------------------------------------------------------------------
 void OscilloscopeComponent::pushData(const float* samples, int numSamples)
 {
-    int copyCount = juce::jmin(numSamples, (int)waveformData.size());
-    for (int i = 0; i < copyCount; ++i) {
-        waveformData[i] = samples[i];
-    }
+    int copyCount = juce::jmin((int)waveformData.size(), numSamples);
+    std::copy(samples, samples + copyCount, waveformData.begin());
     repaint();
 }
 
 void OscilloscopeComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff09090b));
+    auto bounds = getLocalBounds().toFloat();
+
+    // Dark inset background
+    g.setColour(juce::Colour(0xff09090b));
+    g.fillRoundedRectangle(bounds, 4.0f);
     g.setColour(juce::Colour(0xff27272a));
-    g.drawRect(getLocalBounds(), 1);
+    g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
 
-    // Cyan Neon Waveform
+    // Subtle center grid line
+    g.setColour(juce::Colour(0x2222d3ee));
+    g.drawHorizontalLine((int)bounds.getCentreY(), bounds.getX(), bounds.getRight());
+
+    // Waveform path
     juce::Path wavePath;
-    float w = (float)getWidth();
-    float h = (float)getHeight();
-    float midY = h * 0.5f;
+    float midY = bounds.getCentreY();
+    float step = bounds.getWidth() / (float)waveformData.size();
 
-    wavePath.startNewSubPath(0.0f, midY);
-    for (size_t i = 0; i < waveformData.size(); ++i) {
-        float x = (float)i / (float)(waveformData.size() - 1) * w;
-        float y = midY - waveformData[i] * (h * 0.42f);
-        wavePath.lineTo(x, y);
+    wavePath.startNewSubPath(bounds.getX(), midY);
+    for (size_t i = 0; i < waveformData.size(); ++i)
+    {
+        float x = bounds.getX() + i * step;
+        float y = midY - waveformData[i] * (bounds.getHeight() * 0.42f);
+        wavePath.lineTo(x, juce::jlimit(bounds.getY(), bounds.getBottom(), y));
     }
 
-    g.setColour(juce::Colour(0xff06b6d4).withAlpha(0.85f));
-    g.strokePath(wavePath, juce::PathStrokeType(1.8f));
+    // Glow stroke
+    g.setColour(juce::Colour(0x4406b6d4));
+    g.strokePath(wavePath, juce::PathStrokeType(3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(juce::Colour(0xff22d3ee));
+    g.strokePath(wavePath, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 // -----------------------------------------------------------------------------
-// PhotoSynthAudioEditor Implementation
+// 3. Virtual Piano Keyboard Component
 // -----------------------------------------------------------------------------
-PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
-    : AudioProcessorEditor (&p),
-      audioProcessor (p),
-      keyboardComponent (keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
+VirtualPianoKeyboard::VirtualPianoKeyboard(PhotoSynthAudioProcessor& proc)
+    : processor(proc)
 {
-    setLookAndFeel(&customLookAndFeel);
-    setSize (1140, 760);
+}
 
-    // Add Gauges
-    addAndMakeVisible(colorGauge);
-    addAndMakeVisible(brightnessGauge);
-    addAndMakeVisible(saturationGauge);
-    addAndMakeVisible(complexityGauge);
+VirtualPianoKeyboard::~VirtualPianoKeyboard()
+{
+    processor.allNotesOff();
+}
 
-    // Center Components
-    addAndMakeVisible(oscilloscope);
-    addAndMakeVisible(keyboardComponent);
-    keyboardComponent.setAvailableRange(36, 84); // C2 to C6
-    keyboardComponent.setKeyWidth(18.0f);
+bool VirtualPianoKeyboard::isBlackKey(int midiNote)
+{
+    int noteInOctave = midiNote % 12;
+    return (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 || noteInOctave == 8 || noteInOctave == 10);
+}
 
-    // Setup & Add Knobs
-    auto setupRotary = [this](juce::Slider& slider, const juce::String& name) {
-        slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 16);
-        slider.setName(name);
-        addAndMakeVisible(slider);
+int VirtualPianoKeyboard::getNoteAtPosition(juce::Point<int> pos)
+{
+    auto bounds = getLocalBounds();
+    int startNote = 48; // C3
+    int endNote = 72;   // C5 (25 keys total, 15 white keys)
+
+    // Count white keys
+    int whiteKeyCount = 15;
+    float whiteKeyW = (float)bounds.getWidth() / (float)whiteKeyCount;
+    float blackKeyH = bounds.getHeight() * 0.60f;
+
+    // Check black keys first (they sit on top)
+    if (pos.getY() < blackKeyH)
+    {
+        int whiteIdx = 0;
+        for (int n = startNote; n <= endNote; ++n)
+        {
+            if (isBlackKey(n))
+            {
+                float bx = whiteIdx * whiteKeyW - (whiteKeyW * 0.32f);
+                float bw = whiteKeyW * 0.64f;
+                if (pos.getX() >= bx && pos.getX() <= bx + bw)
+                    return n;
+            }
+            else
+            {
+                if (n != startNote)
+                    whiteIdx++;
+            }
+        }
+    }
+
+    // Otherwise check white key
+    int clickedWhiteIdx = juce::jlimit(0, whiteKeyCount - 1, (int)(pos.getX() / whiteKeyW));
+    int currentWhite = 0;
+    for (int n = startNote; n <= endNote; ++n)
+    {
+        if (!isBlackKey(n))
+        {
+            if (currentWhite == clickedWhiteIdx)
+                return n;
+            currentWhite++;
+        }
+    }
+
+    return -1;
+}
+
+void VirtualPianoKeyboard::mouseDown(const juce::MouseEvent& e)
+{
+    int note = getNoteAtPosition(e.getPosition());
+    if (note != -1)
+    {
+        currentNote = note;
+        processor.noteOn(currentNote, 0.85f);
+        repaint();
+    }
+}
+
+void VirtualPianoKeyboard::mouseDrag(const juce::MouseEvent& e)
+{
+    int note = getNoteAtPosition(e.getPosition());
+    if (note != -1 && note != currentNote)
+    {
+        if (currentNote != -1)
+            processor.noteOff(currentNote);
+
+        currentNote = note;
+        processor.noteOn(currentNote, 0.85f);
+        repaint();
+    }
+}
+
+void VirtualPianoKeyboard::mouseUp(const juce::MouseEvent&)
+{
+    if (currentNote != -1)
+    {
+        processor.noteOff(currentNote);
+        currentNote = -1;
+        repaint();
+    }
+}
+
+void VirtualPianoKeyboard::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+    int startNote = 48;
+    int endNote = 72;
+    int whiteKeyCount = 15;
+    float whiteKeyW = bounds.getWidth() / (float)whiteKeyCount;
+    float blackKeyH = bounds.getHeight() * 0.60f;
+
+    // 1. Draw White Keys
+    int whiteIdx = 0;
+    for (int n = startNote; n <= endNote; ++n)
+    {
+        if (!isBlackKey(n))
+        {
+            auto keyRect = juce::Rectangle<float>(whiteIdx * whiteKeyW, 0.0f, whiteKeyW - 1.0f, bounds.getHeight());
+            bool isPressed = (n == currentNote);
+
+            if (isPressed)
+            {
+                g.setColour(juce::Colour(0xffeab308)); // Bright amber active
+            }
+            else
+            {
+                juce::ColourGradient grad(
+                    juce::Colour(0xff27272a), keyRect.getX(), keyRect.getY(),
+                    juce::Colour(0xff18181b), keyRect.getX(), keyRect.getBottom(),
+                    false
+                );
+                g.setGradientFill(grad);
+            }
+
+            g.fillRoundedRectangle(keyRect, 2.0f);
+            g.setColour(juce::Colour(0xff3f3f46));
+            g.drawRoundedRectangle(keyRect, 2.0f, 1.0f);
+
+            whiteIdx++;
+        }
+    }
+
+    // 2. Draw Black Keys
+    whiteIdx = 0;
+    for (int n = startNote; n <= endNote; ++n)
+    {
+        if (isBlackKey(n))
+        {
+            float bx = whiteIdx * whiteKeyW - (whiteKeyW * 0.32f);
+            float bw = whiteKeyW * 0.64f;
+            auto keyRect = juce::Rectangle<float>(bx, 0.0f, bw, blackKeyH);
+            bool isPressed = (n == currentNote);
+
+            if (isPressed)
+            {
+                g.setColour(juce::Colour(0xfff59e0b)); // Amber active
+            }
+            else
+            {
+                juce::ColourGradient grad(
+                    juce::Colour(0xff18181b), keyRect.getX(), keyRect.getY(),
+                    juce::Colour(0xff09090b), keyRect.getX(), keyRect.getBottom(),
+                    false
+                );
+                g.setGradientFill(grad);
+            }
+
+            g.fillRoundedRectangle(keyRect, 2.0f);
+            g.setColour(juce::Colour(0xff27272a));
+            g.drawRoundedRectangle(keyRect, 2.0f, 1.0f);
+        }
+        else
+        {
+            if (n != startNote)
+                whiteIdx++;
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 4. MST Logo Component
+// -----------------------------------------------------------------------------
+void LogoComponent::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+
+    // Dark bezel
+    g.setColour(juce::Colour(0xff141417));
+    g.fillRect(bounds);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRect(bounds, 1.5f);
+
+    // Inner card with subtle radial highlight
+    auto inner = bounds.reduced(5.0f);
+    juce::ColourGradient rad(
+        juce::Colour(0x33ffffff), inner.getCentreX(), inner.getCentreY(),
+        juce::Colour(0x05ffffff), inner.getX(), inner.getY(),
+        true
+    );
+    g.setGradientFill(rad);
+    g.fillRoundedRectangle(inner, 4.0f);
+    g.setColour(juce::Colour(0x44ffffff));
+    g.drawRoundedRectangle(inner, 4.0f, 1.0f);
+
+    // Vector 'M' emblem with soundwave bars
+    float cx = inner.getCentreX();
+    float cy = inner.getCentreY() - 4.0f;
+
+    g.setColour(juce::Colour(0xff22d3ee));
+    juce::Path mPath;
+    mPath.startNewSubPath(cx - 16.0f, cy + 10.0f);
+    mPath.lineTo(cx - 16.0f, cy - 10.0f);
+    mPath.lineTo(cx - 8.0f, cy + 2.0f);
+    mPath.lineTo(cx, cy - 10.0f);
+    mPath.lineTo(cx + 8.0f, cy + 2.0f);
+    mPath.lineTo(cx + 16.0f, cy - 10.0f);
+    mPath.lineTo(cx + 16.0f, cy + 10.0f);
+    g.strokePath(mPath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // Subtitle text
+    g.setColour(juce::Colour(0xffa1a1aa));
+    g.setFont(juce::Font(7.0f, juce::Font::bold));
+    g.drawText("MODULAR SOUND", 0, (int)(inner.getBottom() - 14.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+    g.drawText("TECHNOLOGIES", 0, (int)(inner.getBottom() - 7.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+}
+
+// -----------------------------------------------------------------------------
+// 5. Effects Modal Overlay Component
+// -----------------------------------------------------------------------------
+EffectsModalComponent::EffectsModalComponent(PhotoSynthAudioProcessor& proc, SynthLookAndFeel&, std::function<void()> onClose)
+    : processor(proc), closeCallback(onClose)
+{
+    addAndMakeVisible(closeBtn);
+    addAndMakeVisible(xBtn);
+    addAndMakeVisible(allOnBtn);
+    addAndMakeVisible(allOffBtn);
+
+    closeBtn.onClick = [this] { if (closeCallback) closeCallback(); };
+    xBtn.onClick = [this] { if (closeCallback) closeCallback(); };
+
+    allOnBtn.onClick = [this] {
+        processor.apvts.getParameter("delayEnabled")->setValueNotifyingHost(1.0f);
+        processor.apvts.getParameter("reverbEnabled")->setValueNotifyingHost(1.0f);
+        processor.apvts.getParameter("chorusEnabled")->setValueNotifyingHost(1.0f);
+        processor.apvts.getParameter("phaserEnabled")->setValueNotifyingHost(1.0f);
+        processor.apvts.getParameter("flangerEnabled")->setValueNotifyingHost(1.0f);
+        processor.apvts.getParameter("distortionEnabled")->setValueNotifyingHost(1.0f);
     };
 
-    setupRotary(cutoffKnob, "Cutoff");
-    setupRotary(resKnob, "Resonance");
-    setupRotary(lfoRateKnob, "LFO Rate");
-    setupRotary(lfoDepthKnob, "LFO Depth");
-    setupRotary(volKnob, "Volume");
-    setupRotary(attackKnob, "Attack");
-    setupRotary(decayKnob, "Decay");
-    setupRotary(sustainKnob, "Sustain");
-    setupRotary(releaseKnob, "Release");
-    setupRotary(driveKnob, "Drive");
+    allOffBtn.onClick = [this] {
+        processor.apvts.getParameter("delayEnabled")->setValueNotifyingHost(0.0f);
+        processor.apvts.getParameter("reverbEnabled")->setValueNotifyingHost(0.0f);
+        processor.apvts.getParameter("chorusEnabled")->setValueNotifyingHost(0.0f);
+        processor.apvts.getParameter("phaserEnabled")->setValueNotifyingHost(0.0f);
+        processor.apvts.getParameter("flangerEnabled")->setValueNotifyingHost(0.0f);
+        processor.apvts.getParameter("distortionEnabled")->setValueNotifyingHost(0.0f);
+    };
 
-    addAndMakeVisible(limiterButton);
+    // Helper to configure effect knob
+    auto setupKnob = [this](juce::Slider& knob, const juce::String& paramID, const juce::String& name) {
+        knob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+        knob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        knob.setName(name);
+        addAndMakeVisible(knob);
+        sliderAttachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            processor.apvts, paramID, knob));
+    };
 
-    // Top Bar Controls
-    morphSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    morphSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    addAndMakeVisible(morphSlider);
+    auto setupToggle = [this](juce::ToggleButton& toggle, const juce::String& paramID) {
+        addAndMakeVisible(toggle);
+        buttonAttachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            processor.apvts, paramID, toggle));
+    };
 
-    presetBox.addItem("01. Analog Saw Stack", 1);
-    presetBox.addItem("02. Digital FM Glass", 2);
-    presetBox.addItem("03. Modular Dark Drone", 3);
-    presetBox.setSelectedId(1, juce::dontSendNotification);
-    addAndMakeVisible(presetBox);
+    // 1. Delay
+    setupToggle(delayToggle, "delayEnabled");
+    setupKnob(delayTimeKnob, "delayTime", "Delay Time");
+    setupKnob(delayFbKnob, "delayFeedback", "Delay FB");
+    setupKnob(delayMixKnob, "delayMix", "Delay Mix");
 
-    addAndMakeVisible(saveButton);
-    addAndMakeVisible(deepDiveButton);
+    // 2. Reverb
+    setupToggle(reverbToggle, "reverbEnabled");
+    setupKnob(reverbSizeKnob, "reverbSize", "Reverb Size");
+    setupKnob(reverbDecayKnob, "reverbDecay", "Reverb Decay");
+    setupKnob(reverbMixKnob, "reverbMix", "Reverb Mix");
 
-    // Bind APVTS Attachments
+    // 3. Chorus
+    setupToggle(chorusToggle, "chorusEnabled");
+    setupKnob(chorusRateKnob, "chorusRate", "Chorus Rate");
+    setupKnob(chorusDepthKnob, "chorusDepth", "Chorus Depth");
+    setupKnob(chorusMixKnob, "chorusMix", "Chorus Mix");
+
+    // 4. Phaser
+    setupToggle(phaserToggle, "phaserEnabled");
+    setupKnob(phaserRateKnob, "phaserRate", "Phaser Rate");
+    setupKnob(phaserDepthKnob, "phaserDepth", "Phaser Depth");
+    setupKnob(phaserFbKnob, "phaserFeedback", "Phaser FB");
+
+    // 5. Flanger
+    setupToggle(flangerToggle, "flangerEnabled");
+    setupKnob(flangerRateKnob, "flangerRate", "Flanger Rate");
+    setupKnob(flangerDepthKnob, "flangerDepth", "Flanger Depth");
+    setupKnob(flangerMixKnob, "flangerMix", "Flanger Mix");
+
+    // 6. Distortion
+    setupToggle(distToggle, "distortionEnabled");
+    setupKnob(distDriveKnob, "distortionDrive", "Dist Drive");
+    setupKnob(distMixKnob, "distortionMix", "Dist Mix");
+}
+
+EffectsModalComponent::~EffectsModalComponent() {}
+
+void EffectsModalComponent::paint(juce::Graphics& g)
+{
+    // Dark modal backdrop overlay
+    g.setColour(juce::Colour(0xdd09090b));
+    g.fillAll();
+
+    // Center dialog card
+    auto card = getLocalBounds().toFloat().reduced(40.0f, 30.0f);
+    g.setColour(juce::Colour(0xff121215));
+    g.fillRoundedRectangle(card, 8.0f);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(card, 8.0f, 1.5f);
+
+    // Header title
+    g.setColour(juce::Colour(0xfff4f4f5));
+    g.setFont(juce::Font(16.0f, juce::Font::bold));
+    g.drawText("EFFECTS RACK", (int)card.getX() + 20, (int)card.getY() + 16, 200, 24, juce::Justification::centredLeft);
+
+    // Subtitle
+    g.setColour(juce::Colour(0xffa1a1aa));
+    g.setFont(juce::Font(10.0f, juce::Font::bold));
+    g.drawText("PICTURE AWARE PARAMETERS: ACTIVE", (int)card.getX() + 20, (int)card.getBottom() - 32, 280, 20, juce::Justification::centredLeft);
+}
+
+void EffectsModalComponent::resized()
+{
+    auto card = getLocalBounds().reduced(40, 30);
+
+    xBtn.setBounds(card.getRight() - 36, card.getY() + 14, 24, 24);
+    allOffBtn.setBounds(card.getRight() - 110, card.getY() + 14, 65, 24);
+    allOnBtn.setBounds(card.getRight() - 180, card.getY() + 14, 65, 24);
+    closeBtn.setBounds(card.getRight() - 90, card.getBottom() - 34, 75, 24);
+
+    // Grid of 6 cards inside card bounds
+    auto gridArea = card.reduced(20, 50);
+    int cols = 3;
+    int rows = 2;
+    int cellW = gridArea.getWidth() / cols;
+    int cellH = gridArea.getHeight() / rows;
+
+    auto placeModule = [&](int row, int col, juce::ToggleButton& toggle, juce::Slider& s1, juce::Slider& s2, juce::Slider* s3) {
+        int x = gridArea.getX() + col * cellW;
+        int y = gridArea.getY() + row * cellH;
+        toggle.setBounds(x + 10, y + 10, cellW - 20, 24);
+        int knobSize = 44;
+        s1.setBounds(x + 10, y + 42, knobSize, knobSize);
+        s2.setBounds(x + 10 + knobSize + 10, y + 42, knobSize, knobSize);
+        if (s3)
+            s3->setBounds(x + 10 + (knobSize + 10) * 2, y + 42, knobSize, knobSize);
+    };
+
+    placeModule(0, 0, delayToggle, delayTimeKnob, delayFbKnob, &delayMixKnob);
+    placeModule(0, 1, reverbToggle, reverbSizeKnob, reverbDecayKnob, &reverbMixKnob);
+    placeModule(0, 2, chorusToggle, chorusRateKnob, chorusDepthKnob, &chorusMixKnob);
+    placeModule(1, 0, phaserToggle, phaserRateKnob, phaserDepthKnob, &phaserFbKnob);
+    placeModule(1, 1, flangerToggle, flangerRateKnob, flangerDepthKnob, &flangerMixKnob);
+    placeModule(1, 2, distToggle, distDriveKnob, distMixKnob, nullptr);
+}
+
+// -----------------------------------------------------------------------------
+// 6. Save Preset Modal Overlay Component
+// -----------------------------------------------------------------------------
+SavePresetModalComponent::SavePresetModalComponent(PhotoSynthAudioProcessor& proc, std::function<void()> onClose, std::function<void(const juce::String&)> onSaved)
+    : processor(proc), closeCallback(onClose), saveCallback(onSaved)
+{
+    addAndMakeVisible(nameInput);
+    addAndMakeVisible(descInput);
+    addAndMakeVisible(saveBtn);
+    addAndMakeVisible(cancelBtn);
+
+    nameInput.setText("Preset 01: My Patch");
+    descInput.setText("Custom image timbre synthesis patch");
+
+    cancelBtn.onClick = [this] { if (closeCallback) closeCallback(); };
+    saveBtn.onClick = [this] {
+        juce::String pName = nameInput.getText().trim();
+        if (pName.isNotEmpty()) {
+            processor.saveCurrentPreset(pName, descInput.getText());
+            if (saveCallback) saveCallback(pName);
+        }
+        if (closeCallback) closeCallback();
+    };
+}
+
+void SavePresetModalComponent::paint(juce::Graphics& g)
+{
+    g.setColour(juce::Colour(0xdd09090b));
+    g.fillAll();
+
+    auto card = getLocalBounds().toFloat().withSizeKeepingCentre(420.0f, 260.0f);
+    g.setColour(juce::Colour(0xff121215));
+    g.fillRoundedRectangle(card, 8.0f);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(card, 8.0f, 1.5f);
+
+    g.setColour(juce::Colour(0xfff4f4f5));
+    g.setFont(juce::Font(15.0f, juce::Font::bold));
+    g.drawText("SAVE FULL PRESET", (int)card.getX() + 24, (int)card.getY() + 18, 300, 20, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xffa1a1aa));
+    g.setFont(juce::Font(10.0f, juce::Font::bold));
+    g.drawText("PRESET NAME", (int)card.getX() + 24, (int)card.getY() + 48, 200, 14, juce::Justification::centredLeft);
+    g.drawText("DESCRIPTION (OPTIONAL)", (int)card.getX() + 24, (int)card.getY() + 112, 200, 14, juce::Justification::centredLeft);
+}
+
+void SavePresetModalComponent::resized()
+{
+    auto card = getLocalBounds().withSizeKeepingCentre(420, 260);
+    nameInput.setBounds(card.getX() + 24, card.getY() + 66, card.getWidth() - 48, 30);
+    descInput.setBounds(card.getX() + 24, card.getY() + 130, card.getWidth() - 48, 48);
+    cancelBtn.setBounds(card.getRight() - 190, card.getBottom() - 44, 75, 26);
+    saveBtn.setBounds(card.getRight() - 105, card.getBottom() - 44, 85, 26);
+}
+
+// -----------------------------------------------------------------------------
+// 7. Deep Dive Modal Overlay Component
+// -----------------------------------------------------------------------------
+DeepDiveModalComponent::DeepDiveModalComponent(PhotoSynthAudioProcessor& proc, std::function<void()> onClose)
+    : processor(proc), closeCallback(onClose)
+{
+    addAndMakeVisible(closeBtn);
+    closeBtn.onClick = [this] { if (closeCallback) closeCallback(); };
+}
+
+void DeepDiveModalComponent::paint(juce::Graphics& g)
+{
+    g.setColour(juce::Colour(0xdd09090b));
+    g.fillAll();
+
+    auto card = getLocalBounds().toFloat().withSizeKeepingCentre(500.0f, 380.0f);
+    g.setColour(juce::Colour(0xff121215));
+    g.fillRoundedRectangle(card, 8.0f);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(card, 8.0f, 1.5f);
+
+    g.setColour(juce::Colour(0xff22d3ee));
+    g.setFont(juce::Font(15.0f, juce::Font::bold));
+    g.drawText("IMAGE DNA TELEMETRY (DEEP DIVE)", (int)card.getX() + 24, (int)card.getY() + 18, 380, 20, juce::Justification::centredLeft);
+
+    auto analysis = processor.getLatestAnalysis();
+
+    g.setFont(juce::Font(11.0f, juce::Font::plain));
+    g.setColour(juce::Colour(0xffe4e4e7));
+
+    int startY = (int)card.getY() + 55;
+    auto drawRow = [&](const juce::String& key, const juce::String& val, int y) {
+        g.setColour(juce::Colour(0xffa1a1aa));
+        g.drawText(key, (int)card.getX() + 24, y, 200, 18, juce::Justification::centredLeft);
+        g.setColour(juce::Colour(0xff22d3ee));
+        g.drawText(val, (int)card.getX() + 220, y, 220, 18, juce::Justification::centredLeft);
+    };
+
+    drawRow("Slot A Source:", processor.getSlotAName(), startY);
+    drawRow("Slot B Source:", processor.getSlotBName(), startY + 24);
+    drawRow("Crossfade Morph Value:", juce::String(*processor.apvts.getRawParameterValue("morph"), 3), startY + 48);
+    drawRow("Calculated Timbre DNA:", juce::String(analysis.timbreDna * 100.0f, 1) + "%", startY + 72);
+    drawRow("Brightness Luma:", juce::String(analysis.brightness * 100.0f, 1) + "%", startY + 96);
+    drawRow("Color Saturation:", juce::String(analysis.saturation * 100.0f, 1) + "%", startY + 120);
+    drawRow("Edge Density (Complexity):", juce::String(analysis.complexity * 100.0f, 1) + "%", startY + 144);
+    drawRow("Temporal Era Mapping:", analysis.temporalEra.label, startY + 168);
+    drawRow("Engine Archetype:", analysis.temporalEra.architecture, startY + 192);
+    drawRow("Synthesis Model:", photosynth::toEngineParamText(analysis.archetype), startY + 216);
+}
+
+void DeepDiveModalComponent::resized()
+{
+    auto card = getLocalBounds().withSizeKeepingCentre(500, 380);
+    closeBtn.setBounds(card.getRight() - 95, card.getBottom() - 40, 75, 26);
+}
+
+// -----------------------------------------------------------------------------
+// 8. Main Plugin Editor
+// -----------------------------------------------------------------------------
+PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
+    : AudioProcessorEditor (&p), audioProcessor (p), pianoKeyboard(p)
+{
+    setLookAndFeel (&customLookAndFeel);
+
+    // Add Logo & Header Controls
+    addAndMakeVisible (logoBox);
+    addAndMakeVisible (autoSweepBtn);
+    addAndMakeVisible (slotABox);
+    addAndMakeVisible (morphSlider);
+    addAndMakeVisible (slotBBox);
+    addAndMakeVisible (presetBox);
+    addAndMakeVisible (savePresetBtn);
+    addAndMakeVisible (effectsBtn);
+    addAndMakeVisible (deepDiveBtn);
+    addAndMakeVisible (exportBtn);
+
+    // Auto Sweep Morph Toggle Button
+    autoSweepBtn.onClick = [this] {
+        isAutoSweeping = !isAutoSweeping;
+        autoSweepBtn.setButtonText(isAutoSweeping ? "||" : ">");
+    };
+
+    // Slot A Dropdown items
+    slotABox.addItem ("1. Synthwave Sunset", 1);
+    slotABox.addItem ("2. Obsidian Crypt", 2);
+    slotABox.addItem ("3. Refractive Prism", 3);
+    slotABox.addItem ("4. Neon Aurora", 4);
+    slotABox.addItem ("+ Upload Image A...", 5);
+    slotABox.setSelectedId (1, juce::dontSendNotification);
+    slotABox.onChange = [this] {
+        int id = slotABox.getSelectedId();
+        if (id >= 1 && id <= 4)
+            audioProcessor.loadSlotAPreset(id - 1);
+        else if (id == 5)
+            openImageFileChooser(true);
+        updateEraText();
+        repaint();
+    };
+
+    // Slot B Dropdown items
+    slotBBox.addItem ("1. Synthwave Sunset", 1);
+    slotBBox.addItem ("2. Obsidian Crypt", 2);
+    slotBBox.addItem ("3. Refractive Prism", 3);
+    slotBBox.addItem ("4. Neon Aurora", 4);
+    slotBBox.addItem ("+ Upload Image B...", 5);
+    slotBBox.setSelectedId (2, juce::dontSendNotification);
+    slotBBox.onChange = [this] {
+        int id = slotBBox.getSelectedId();
+        if (id >= 1 && id <= 4)
+            audioProcessor.loadSlotBPreset(id - 1);
+        else if (id == 5)
+            openImageFileChooser(false);
+        updateEraText();
+        repaint();
+    };
+
+    // Morph Slider
+    morphSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    morphSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    morphSlider.setRange (0.0, 1.0, 0.001);
+    morphAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, "morph", morphSlider);
+
+    // Full Preset Dropdown
+    refreshPresetDropdown();
+    presetBox.onChange = [this] {
+        int id = presetBox.getSelectedId();
+        if (id >= 1 && id <= 4) {
+            audioProcessor.loadSlotAPreset(id - 1);
+            audioProcessor.loadSlotBPreset((id) % 4);
+            morphSlider.setValue(0.0);
+            slotABox.setSelectedId(id, juce::dontSendNotification);
+            slotBBox.setSelectedId(((id) % 4) + 1, juce::dontSendNotification);
+        }
+        updateEraText();
+        repaint();
+    };
+
+    // Action buttons
+    savePresetBtn.onClick = [this] {
+        savePresetModal = std::make_unique<SavePresetModalComponent>(
+            audioProcessor,
+            [this] { savePresetModal.reset(); repaint(); },
+            [this](const juce::String&) { refreshPresetDropdown(); }
+        );
+        addAndMakeVisible (*savePresetModal);
+        savePresetModal->setBounds (getLocalBounds());
+    };
+
+    effectsBtn.onClick = [this] {
+        effectsModal = std::make_unique<EffectsModalComponent>(
+            audioProcessor,
+            customLookAndFeel,
+            [this] { effectsModal.reset(); repaint(); }
+        );
+        addAndMakeVisible (*effectsModal);
+        effectsModal->setBounds (getLocalBounds());
+    };
+
+    deepDiveBtn.onClick = [this] {
+        deepDiveModal = std::make_unique<DeepDiveModalComponent>(
+            audioProcessor,
+            [this] { deepDiveModal.reset(); repaint(); }
+        );
+        addAndMakeVisible (*deepDiveModal);
+        deepDiveModal->setBounds (getLocalBounds());
+    };
+
+    // Left Column: Radial Gauges
+    addAndMakeVisible (colorGauge);
+    addAndMakeVisible (brightnessGauge);
+    addAndMakeVisible (saturationGauge);
+    addAndMakeVisible (complexityGauge);
+
+    // Center Column: Oscilloscope & Keyboard
+    addAndMakeVisible (oscilloscope);
+    addAndMakeVisible (pianoKeyboard);
+
+    // Right Column: Knobs
+    auto setupRotaryKnob = [this](juce::Slider& knob, const juce::String& name) {
+        knob.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        knob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        knob.setName (name);
+        addAndMakeVisible (knob);
+    };
+
+    setupRotaryKnob (cutoffKnob, "Cutoff");
+    setupRotaryKnob (resKnob, "Resonance");
+    setupRotaryKnob (lfoRateKnob, "LFO Rate");
+    setupRotaryKnob (lfoDepthKnob, "LFO Depth");
+    setupRotaryKnob (volKnob, "Master Volume");
+    setupRotaryKnob (attackKnob, "Attack");
+    setupRotaryKnob (decayKnob, "Decay");
+    setupRotaryKnob (sustainKnob, "Sustain");
+    setupRotaryKnob (releaseKnob, "Release");
+
+    addAndMakeVisible (limiterButton);
+
+    // Bind APVTS attachments
     cutoffAttach   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "cutoff", cutoffKnob);
     resAttach      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "resonance", resKnob);
     lfoRateAttach  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "lfoRate", lfoRateKnob);
@@ -150,139 +735,342 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     decayAttach    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "decay", decayKnob);
     sustainAttach  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "sustain", sustainKnob);
     releaseAttach  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "release", releaseKnob);
-    driveAttach    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "drive", driveKnob);
-    morphAttach    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "morph", morphSlider);
     limiterAttach  = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(audioProcessor.apvts, "limiter", limiterButton);
 
-    startTimerHz(30); // 30 FPS UI Update
+    updateEraText();
+
+    // Responsive native dimensions matching 1:1 design
+    setSize (1024, 720);
+    setResizable (true, true);
+    setResizeLimits (900, 600, 1440, 960);
+
+    startTimerHz (30); // 30 FPS UI refresh & oscilloscope sync
 }
 
 PhotoSynthAudioEditor::~PhotoSynthAudioEditor()
 {
-    stopTimer();
-    setLookAndFeel(nullptr);
+    setLookAndFeel (nullptr);
 }
 
-void PhotoSynthAudioEditor::timerCallback()
+void PhotoSynthAudioEditor::refreshPresetDropdown()
 {
-    // Update Gauges from current analysis
-    auto res = audioProcessor.getLatestAnalysis();
-    colorGauge.setValue(res.timbreDna);
-    brightnessGauge.setValue(res.brightness);
-    saturationGauge.setValue(res.saturation);
-    complexityGauge.setValue(res.complexity);
+    presetBox.clear(juce::dontSendNotification);
+    presetBox.addItem ("Preset: Synthwave Sunset", 1);
+    presetBox.addItem ("Preset: Obsidian Crypt", 2);
+    presetBox.addItem ("Preset: Refractive Prism", 3);
+    presetBox.addItem ("Preset: Neon Aurora", 4);
 
-    // Refresh oscilloscope
-    float tempBuffer[256];
-    audioProcessor.getScopeData(tempBuffer, 256);
-    oscilloscope.pushData(tempBuffer, 256);
+    auto userPresets = audioProcessor.getUserPresetNames();
+    for (int i = 0; i < userPresets.size(); ++i) {
+        presetBox.addItem ("* " + userPresets[i], 100 + i);
+    }
+    presetBox.setSelectedId(1, juce::dontSendNotification);
+}
+
+void PhotoSynthAudioEditor::updateEraText()
+{
+    auto analysis = audioProcessor.getLatestAnalysis();
+    currentEraText = "ERA: " + analysis.temporalEra.label;
+}
+
+void PhotoSynthAudioEditor::openImageFileChooser(bool isSlotA)
+{
+    auto chooser = std::make_shared<juce::FileChooser>(
+        "Select an Image to Synthesize",
+        juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
+        "*.jpg;*.jpeg;*.png;*.webp"
+    );
+
+    chooser->launchOpenMode([this, chooser, isSlotA](const juce::FileChooser& fc) {
+        auto file = fc.getResult();
+        if (file.existsAsFile()) {
+            auto loaded = juce::ImageFileFormat::loadFrom(file);
+            if (loaded.isValid()) {
+                if (isSlotA)
+                    audioProcessor.loadSlotAImage(loaded, file.getFileNameWithoutExtension());
+                else
+                    audioProcessor.loadSlotBImage(loaded, file.getFileNameWithoutExtension());
+
+                updateEraText();
+                repaint();
+            }
+        }
+    });
 }
 
 bool PhotoSynthAudioEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    return files.size() > 0 && (
-        files[0].endsWithIgnoreCase(".png") ||
-        files[0].endsWithIgnoreCase(".jpg") ||
-        files[0].endsWithIgnoreCase(".jpeg") ||
-        files[0].endsWithIgnoreCase(".webp")
-    );
+    for (const auto& f : files) {
+        if (f.endsWithIgnoreCase(".jpg") || f.endsWithIgnoreCase(".jpeg") || f.endsWithIgnoreCase(".png"))
+            return true;
+    }
+    return false;
 }
 
-void PhotoSynthAudioEditor::filesDropped (const juce::StringArray& files, int, int)
+void PhotoSynthAudioEditor::filesDropped (const juce::StringArray& files, int x, int)
 {
-    if (files.size() > 0) {
-        juce::File imageFile(files[0]);
-        currentLoadedImage = juce::ImageFileFormat::loadFrom(imageFile);
-        if (!currentLoadedImage.isNull()) {
-            audioProcessor.loadSlotAImage(currentLoadedImage);
-            repaint();
+    for (const auto& f : files) {
+        juce::File file (f);
+        if (file.existsAsFile()) {
+            auto loaded = juce::ImageFileFormat::loadFrom(file);
+            if (loaded.isValid()) {
+                // If dropped on left side of image, load to Slot A; else Slot B
+                if (x < imageBounds.getCentreX())
+                    audioProcessor.loadSlotAImage(loaded, file.getFileNameWithoutExtension());
+                else
+                    audioProcessor.loadSlotBImage(loaded, file.getFileNameWithoutExtension());
+
+                updateEraText();
+                repaint();
+                break;
+            }
         }
     }
 }
 
-void PhotoSynthAudioEditor::paint (juce::Graphics& g)
+void PhotoSynthAudioEditor::mouseUp(const juce::MouseEvent& e)
 {
-    // Deep dark background chassis
-    g.fillAll (juce::Colour (0xff09090b));
+    // Click on image box opens image file chooser
+    if (imageBounds.contains(e.getPosition())) {
+        bool isLeftHalf = (e.getPosition().getX() < imageBounds.getCentreX());
+        openImageFileChooser(isLeftHalf);
+    }
+}
 
-    // Top Title Bar
-    auto headerBounds = juce::Rectangle<int>(0, 0, getWidth(), 56);
-    g.setColour(juce::Colour(0xff141417));
-    g.fillRect(headerBounds);
-    g.setColour(juce::Colour(0xff27272a));
-    g.drawHorizontalLine(56, 0.0f, (float)getWidth());
-
-    // MST Logo & Title
-    g.setColour(juce::Colour(0xffe4e4e7));
-    g.setFont(juce::Font(18.0f, juce::Font::bold));
-    g.drawText("PAINT A SYNTH", 24, 12, 200, 32, juce::Justification::left);
-
-    g.setColour(juce::Colour(0xff71717a));
-    g.setFont(juce::Font(10.0f, juce::Font::plain));
-    g.drawText("MODULAR SOUND TECHNOLOGIES", 24, 38, 220, 14, juce::Justification::left);
-
-    // Central Image Drop Area
-    auto dropBounds = juce::Rectangle<int>(270, 70, 440, 340);
-    g.setColour(juce::Colour(0xff121215));
-    g.fillRect(dropBounds);
-    g.setColour(juce::Colour(0xff27272a));
-    g.drawRect(dropBounds.toFloat(), 1.5f);
-
-    if (!currentLoadedImage.isNull()) {
-        g.drawImage(currentLoadedImage, dropBounds.toFloat(), juce::RectanglePlacement::centred);
-    } else {
-        g.setColour(juce::Colour(0xff71717a));
-        g.setFont(juce::Font(14.0f, juce::Font::bold));
-        g.drawText("DRAG & DROP IMAGE HERE (SLOT A)", dropBounds, juce::Justification::centred);
+void PhotoSynthAudioEditor::timerCallback()
+{
+    // 1. Auto Sweep morph slider if active
+    if (isAutoSweeping) {
+        float currentMorph = (float)morphSlider.getValue();
+        currentMorph += sweepDirection * 0.008f;
+        if (currentMorph >= 1.0f) {
+            currentMorph = 1.0f;
+            sweepDirection = -1.0f;
+        } else if (currentMorph <= 0.0f) {
+            currentMorph = 0.0f;
+            sweepDirection = 1.0f;
+        }
+        morphSlider.setValue(currentMorph, juce::sendNotificationSync);
     }
 
-    // Era label badge
+    // 2. Update Gauges from processor
     auto analysis = audioProcessor.getLatestAnalysis();
-    g.setColour(juce::Colour(0xff22d3ee));
-    g.setFont(juce::Font(11.0f, juce::Font::bold));
-    g.drawText("ERA: " + analysis.temporalEra.eraLabel, 270, 416, 440, 20, juce::Justification::centred);
+    colorGauge.setValue (analysis.timbreDna);
+    brightnessGauge.setValue (analysis.brightness);
+    saturationGauge.setValue (analysis.saturation);
+    complexityGauge.setValue (analysis.complexity);
+
+    // 3. Update Oscilloscope
+    float scopeData[256];
+    audioProcessor.getScopeData (scopeData, 256);
+    oscilloscope.pushData (scopeData, 256);
+
+    updateEraText();
+}
+
+void PhotoSynthAudioEditor::paint (juce::Graphics& g)
+{
+    // Main Dark Chassis
+    g.fillAll (juce::Colour(0xff09090b));
+
+    // Outer Bezel & Border
+    g.setColour (juce::Colour(0xff27272a));
+    g.drawRect (getLocalBounds().toFloat(), 1.5f);
+
+    // Top Titlebar Embossed Brand Text
+    g.setColour (juce::Colour(0xff141417));
+    g.fillRect (80, 0, getWidth() - 80, 32);
+    g.setColour (juce::Colour(0xff27272a));
+    g.drawHorizontalLine (32, 80, (float)getWidth());
+
+    g.setColour (juce::Colour(0xfff4f4f5));
+    g.setFont (juce::Font(12.0f, juce::Font::bold));
+    g.drawText ("PAINT A SYNTH", 80, 0, getWidth() - 80, 32, juce::Justification::centred);
+
+    // Subheader background bar
+    g.setColour (juce::Colour(0xff121215));
+    g.fillRect (80, 32, getWidth() - 80, 42);
+    g.setColour (juce::Colour(0xff27272a));
+    g.drawHorizontalLine (74, 0, (float)getWidth());
+
+    // Morph label
+    g.setColour (juce::Colour(0xff22d3ee));
+    g.setFont (juce::Font(10.0f, juce::Font::bold));
+    g.drawText ("A / B MORPH", morphSlider.getX(), morphSlider.getY() - 12, morphSlider.getWidth(), 12, juce::Justification::centred);
+
+    // Center Column: Render Blended Image
+    g.setColour (juce::Colour(0xff121215));
+    g.fillRect (imageBounds);
+    g.setColour (juce::Colour(0xff27272a));
+    g.drawRect (imageBounds.toFloat(), 1.5f);
+
+    auto blended = audioProcessor.getBlendedImage();
+    if (blended.isValid()) {
+        g.drawImage (blended, imageBounds.toFloat(), juce::RectanglePlacement::centred);
+    }
+
+    // Change image overlay buttons text
+    g.setColour (juce::Colour(0xbb000000));
+    g.fillRoundedRectangle (imageBounds.getX() + 8, imageBounds.getBottom() - 28, 120, 20, 3.0f);
+    g.fillRoundedRectangle (imageBounds.getRight() - 128, imageBounds.getBottom() - 28, 120, 20, 3.0f);
+
+    g.setColour (juce::Colour(0xff22d3ee));
+    g.setFont (juce::Font(9.0f, juce::Font::bold));
+    g.drawText ("CHANGE IMAGE A", imageBounds.getX() + 8, imageBounds.getBottom() - 28, 120, 20, juce::Justification::centred);
+    g.drawText ("CHANGE IMAGE B", imageBounds.getRight() - 128, imageBounds.getBottom() - 28, 120, 20, juce::Justification::centred);
+
+    // ERA Badge Pill
+    int eraPillW = 280;
+    int eraPillH = 22;
+    int eraPillX = imageBounds.getCentreX() - eraPillW / 2;
+    int eraPillY = imageBounds.getBottom() + 6;
+
+    g.setColour (juce::Colour(0xff141417));
+    g.fillRoundedRectangle ((float)eraPillX, (float)eraPillY, (float)eraPillW, (float)eraPillH, 11.0f);
+    g.setColour (juce::Colour(0xff22d3ee));
+    g.drawRoundedRectangle ((float)eraPillX, (float)eraPillY, (float)eraPillW, (float)eraPillH, 11.0f, 1.0f);
+
+    g.setColour (juce::Colour(0xfff4f4f5));
+    g.setFont (juce::Font(10.0f, juce::Font::bold));
+    g.drawText (currentEraText, eraPillX, eraPillY, eraPillW, eraPillH, juce::Justification::centred);
+
+    // Left Column Panel
+    int leftW = (int)(getWidth() * 0.22f);
+    auto leftPanel = juce::Rectangle<int>(10, 84, leftW, getHeight() - 94);
+    g.setColour (juce::Colour(0xff121215));
+    g.fillRoundedRectangle (leftPanel.toFloat(), 6.0f);
+    g.setColour (juce::Colour(0xff27272a));
+    g.drawRoundedRectangle (leftPanel.toFloat(), 6.0f, 1.2f);
+
+    // Left Panel Header
+    g.setColour (juce::Colour(0xfff4f4f5));
+    g.setFont (juce::Font(11.0f, juce::Font::bold));
+    g.drawText ("TIMBRE DNA", leftPanel.getX() + 14, leftPanel.getY() + 10, 100, 20, juce::Justification::centredLeft);
+
+    // Right Column Panel
+    int rightW = (int)(getWidth() * 0.32f);
+    auto rightPanel = juce::Rectangle<int>(getWidth() - rightW - 10, 84, rightW, getHeight() - 94);
+    g.setColour (juce::Colour(0xff121215));
+    g.fillRoundedRectangle (rightPanel.toFloat(), 6.0f);
+    g.setColour (juce::Colour(0xff27272a));
+    g.drawRoundedRectangle (rightPanel.toFloat(), 6.0f, 1.2f);
+
+    // Right Subpanel Headers
+    g.setColour (juce::Colour(0xfff4f4f5));
+    g.setFont (juce::Font(11.0f, juce::Font::bold));
+    g.drawText ("MANUAL OVERRIDE", rightPanel.getX() + 14, rightPanel.getY() + 10, 160, 20, juce::Justification::centredLeft);
+
+    int midDividerY = rightPanel.getY() + (rightPanel.getHeight() * 0.44f);
+    g.setColour (juce::Colour(0xff27272a));
+    g.drawHorizontalLine (midDividerY, (float)rightPanel.getX() + 6.0f, (float)rightPanel.getRight() - 6.0f);
+
+    g.setColour (juce::Colour(0xfff4f4f5));
+    g.drawText ("DYNAMICS / OUTPUT", rightPanel.getX() + 14, midDividerY + 8, 160, 20, juce::Justification::centredLeft);
+
+    // Knob Labels
+    auto drawKnobLabel = [&](juce::Slider& s, const juce::String& lbl, const juce::String& val) {
+        g.setColour (juce::Colour(0xffa1a1aa));
+        g.setFont (juce::Font(9.0f, juce::Font::bold));
+        g.drawText (lbl, s.getX() - 6, s.getY() - 14, s.getWidth() + 12, 12, juce::Justification::centred);
+        g.setColour (juce::Colour(0xff22d3ee));
+        g.setFont (juce::Font(9.0f, juce::Font::plain));
+        g.drawText (val, s.getX() - 6, s.getBottom() + 1, s.getWidth() + 12, 12, juce::Justification::centred);
+    };
+
+    drawKnobLabel (cutoffKnob, "CUTOFF", juce::String(juce::roundToInt((float)cutoffKnob.getValue())) + " Hz");
+    drawKnobLabel (resKnob, "RESONANCE", juce::String((float)resKnob.getValue(), 2) + " Q");
+    drawKnobLabel (lfoRateKnob, "LFO RATE", juce::String((float)lfoRateKnob.getValue(), 1) + " Hz");
+    drawKnobLabel (lfoDepthKnob, "LFO DEPTH", juce::String((float)lfoDepthKnob.getValue(), 2));
+
+    drawKnobLabel (volKnob, "MASTER VOL", juce::String((float)volKnob.getValue(), 1) + " dB");
+    drawKnobLabel (attackKnob, "ATTACK", juce::String((float)attackKnob.getValue(), 3) + " s");
+    drawKnobLabel (decayKnob, "DECAY", juce::String((float)decayKnob.getValue(), 2) + " s");
+    drawKnobLabel (sustainKnob, "SUSTAIN", juce::String(juce::roundToInt((float)sustainKnob.getValue() * 100.0f)) + "%");
+    drawKnobLabel (releaseKnob, "RELEASE", juce::String((float)releaseKnob.getValue(), 2) + " s");
 }
 
 void PhotoSynthAudioEditor::resized()
 {
-    // Header Bar Elements
-    morphSlider.setBounds(340, 14, 280, 28);
-    presetBox.setBounds(650, 14, 160, 28);
-    saveButton.setBounds(820, 14, 70, 28);
-    deepDiveButton.setBounds(900, 14, 90, 28);
+    // Resize modal overlays if active
+    if (effectsModal) effectsModal->setBounds (getLocalBounds());
+    if (savePresetModal) savePresetModal->setBounds (getLocalBounds());
+    if (deepDiveModal) deepDiveModal->setBounds (getLocalBounds());
 
-    // Left Column (Gauges): X = 20, W = 220
-    int gaugeSize = 100;
-    colorGauge.setBounds(30, 80, gaugeSize, gaugeSize + 20);
-    brightnessGauge.setBounds(140, 80, gaugeSize, gaugeSize + 20);
-    saturationGauge.setBounds(30, 220, gaugeSize, gaugeSize + 20);
-    complexityGauge.setBounds(140, 220, gaugeSize, gaugeSize + 20);
+    // 1. Logo Box on top left
+    logoBox.setBounds (0, 0, 80, 74);
 
-    // Center Column: Oscilloscope & Keyboard
-    oscilloscope.setBounds(270, 440, 440, 110);
-    keyboardComponent.setBounds(270, 565, 440, 120);
+    // 2. Sub-Header Controls
+    int subY = 38;
+    autoSweepBtn.setBounds (92, subY, 28, 26);
+    slotABox.setBounds (126, subY, 130, 26);
+    morphSlider.setBounds (264, subY, 120, 26);
+    slotBBox.setBounds (392, subY, 130, 26);
 
-    // Right Column (Knobs Grid): X = 740, W = 360
-    int rx = 740;
-    int kw = 70;
-    int kh = 85;
-    int gapX = 15;
-    int gapY = 15;
+    presetBox.setBounds (getWidth() - 280, subY, 135, 26);
+    savePresetBtn.setBounds (getWidth() - 140, subY, 50, 26);
+    exportBtn.setBounds (getWidth() - 85, subY, 75, 26);
 
-    // Row 1
-    cutoffKnob.setBounds(rx, 80, kw, kh);
-    resKnob.setBounds(rx + kw + gapX, 80, kw, kh);
-    lfoRateKnob.setBounds(rx + (kw + gapX) * 2, 80, kw, kh);
-    lfoDepthKnob.setBounds(rx + (kw + gapX) * 3, 80, kw, kh);
+    // 3. Left Column: TIMBRE DNA & Radial Gauges
+    int leftW = (int)(getWidth() * 0.22f);
+    auto leftPanel = juce::Rectangle<int>(10, 84, leftW, getHeight() - 94);
+    effectsBtn.setBounds (leftPanel.getRight() - 75, leftPanel.getY() + 8, 65, 22);
 
-    // Row 2
-    volKnob.setBounds(rx, 80 + kh + gapY, kw, kh);
-    attackKnob.setBounds(rx + kw + gapX, 80 + kh + gapY, kw, kh);
-    decayKnob.setBounds(rx + (kw + gapX) * 2, 80 + kh + gapY, kw, kh);
-    sustainKnob.setBounds(rx + (kw + gapX) * 3, 80 + kh + gapY, kw, kh);
+    int gaugeSize = juce::jlimit(60, 95, (leftPanel.getHeight() - 90) / 4);
+    int gaugeX = leftPanel.getCentreX() - gaugeSize / 2;
+    int startGY = leftPanel.getY() + 38;
+    int gapY = (leftPanel.getHeight() - 85 - gaugeSize * 4) / 3;
 
-    // Row 3
-    releaseKnob.setBounds(rx, 80 + (kh + gapY) * 2, kw, kh);
-    driveKnob.setBounds(rx + kw + gapX, 80 + (kh + gapY) * 2, kw, kh);
-    limiterButton.setBounds(rx + (kw + gapX) * 2, 80 + (kh + gapY) * 2 + 20, 100, 30);
+    colorGauge.setBounds (gaugeX, startGY, gaugeSize, gaugeSize);
+    brightnessGauge.setBounds (gaugeX, startGY + (gaugeSize + gapY), gaugeSize, gaugeSize);
+    saturationGauge.setBounds (gaugeX, startGY + (gaugeSize + gapY) * 2, gaugeSize, gaugeSize);
+    complexityGauge.setBounds (gaugeX, startGY + (gaugeSize + gapY) * 3, gaugeSize, gaugeSize);
+
+    deepDiveBtn.setBounds (leftPanel.getX() + 10, leftPanel.getBottom() - 30, leftPanel.getWidth() - 20, 22);
+
+    // 4. Center Column: Image, Oscilloscope & Keyboard
+    int rightW = (int)(getWidth() * 0.32f);
+    int centerLeft = leftPanel.getRight() + 10;
+    int centerW = getWidth() - rightW - centerLeft - 20;
+
+    int imgH = juce::jlimit(180, 290, (int)(getHeight() * 0.38f));
+    imageBounds = juce::Rectangle<int>(centerLeft, 84, centerW, imgH);
+
+    int scopeY = imageBounds.getBottom() + 36;
+    int scopeH = juce::jlimit(45, 75, (int)(getHeight() * 0.10f));
+    oscilloscope.setBounds (centerLeft, scopeY, centerW, scopeH);
+
+    int pianoY = scopeY + scopeH + 10;
+    int pianoH = juce::jmax(65, getHeight() - pianoY - 14);
+    pianoKeyboard.setBounds (centerLeft, pianoY, centerW, pianoH);
+
+    // 5. Right Column: Manual Override Knobs
+    auto rightPanel = juce::Rectangle<int>(getWidth() - rightW - 10, 84, rightW, getHeight() - 94);
+
+    int knobD = juce::jlimit(44, 56, (rightPanel.getWidth() - 60) / 2);
+    int rCol1 = rightPanel.getX() + 24;
+    int rCol2 = rightPanel.getX() + rightPanel.getWidth() - knobD - 24;
+
+    // Row 1 (Cutoff, Resonance)
+    int rRow1Y = rightPanel.getY() + 42;
+    cutoffKnob.setBounds (rCol1, rRow1Y, knobD, knobD);
+    resKnob.setBounds (rCol2, rRow1Y, knobD, knobD);
+
+    // Row 2 (LFO Rate, LFO Depth)
+    int rRow2Y = rRow1Y + knobD + 26;
+    lfoRateKnob.setBounds (rCol1, rRow2Y, knobD, knobD);
+    lfoDepthKnob.setBounds (rCol2, rRow2Y, knobD, knobD);
+
+    // Section 2: Dynamics
+    int midDividerY = rightPanel.getY() + (rightPanel.getHeight() * 0.44f);
+    int rRow3Y = midDividerY + 40;
+    volKnob.setBounds (rCol1, rRow3Y, knobD, knobD);
+    attackKnob.setBounds (rCol2, rRow3Y, knobD, knobD);
+
+    int rRow4Y = rRow3Y + knobD + 26;
+    decayKnob.setBounds (rCol1, rRow4Y, knobD, knobD);
+    sustainKnob.setBounds (rCol2, rRow4Y, knobD, knobD);
+
+    int rRow5Y = rRow4Y + knobD + 26;
+    releaseKnob.setBounds (rCol1, rRow5Y, knobD, knobD);
+    limiterButton.setBounds (rCol2, rRow5Y + 12, knobD + 10, 24);
 }

@@ -205,5 +205,18 @@ ImageAnalysisResult ImageAnalyzer::analyzeImage(const juce::Image& image)
         cRatio, mRatio, yRatio
     );
 
+    // Audio Synthesis Parameter Extraction (1:1 with Web Prototype ImageAnalyzer)
+    result.cutoff    = juce::jlimit(120.0f, 19500.0f, 150.0f + std::pow(result.brightness, 1.8f) * 16000.0f + result.complexity * 3200.0f);
+    result.resonance = juce::jlimit(0.1f, 10.0f, 0.5f + result.saturation * 6.5f + result.colorEntropy * 2.5f);
+    result.attack    = juce::jlimit(0.002f, 3.5f, 0.002f + std::pow(1.0f - result.complexity, 2.5f) * 1.5f);
+    result.decay     = juce::jlimit(0.05f, 6.0f, 0.08f + (1.0f - result.complexity * 0.6f) * 2.0f);
+    result.sustain   = juce::jlimit(0.05f, 0.95f, 0.15f + (1.0f - result.complexity * 0.8f) * 0.6f);
+    result.release   = juce::jlimit(0.01f, 5.0f, 0.05f + std::pow(1.0f - result.saturation, 1.8f) * 1.5f);
+    result.lfoRate   = juce::jlimit(0.1f, 20.0f, 0.2f + result.complexity * 12.0f);
+    result.lfoDepth  = juce::jlimit(0.0f, 1.0f, 0.15f + result.saturation * 0.55f);
+    result.drive     = result.saturation > 0.4f ? (result.saturation - 0.4f) * 1.5f : 0.0f;
+    result.delayMix  = juce::jlimit(0.0f, 1.0f, 0.10f + result.complexity * 0.45f + cRatio * 0.25f);
+    result.reverbMix = juce::jlimit(0.0f, 1.0f, 0.10f + (1.0f - result.brightness) * 0.50f + result.earthyMutedness * 0.30f);
+
     return result;
 }

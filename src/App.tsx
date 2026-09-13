@@ -705,11 +705,16 @@ export default function App() {
       <div className="w-full max-w-[1280px] h-full max-h-[960px] vst-chassis border border-[#27272a] rounded-none shadow-2xl flex flex-col overflow-hidden relative">
         {/* Header Section Container with Left Logo */}
         <div className="relative shrink-0 flex flex-col">
-          {/* Left Square Logo Block displaying uploaded Modular Sound Technologies logo */}
-          <div className="absolute left-0 top-0 bottom-0 z-30 w-16 sm:w-20 bg-[#141417] border-r-2 border-b-2 border-[#27272a] flex flex-col items-center justify-center p-1.5 shadow-[0_0_12px_rgba(0,0,0,0.8)] overflow-hidden">
+          {/* Left Square Logo Block displaying Modular Sound Technologies logo - Click to Export VST/AU */}
+          <button
+            type="button"
+            onClick={() => setIsExportModalOpen(true)}
+            title="Modular Sound Technologies - Click to Export VST3 & AU Plugin"
+            className="absolute left-0 top-0 bottom-0 z-30 w-16 sm:w-20 bg-[#141417] border-r-2 border-b-2 border-[#27272a] hover:border-amber-500/60 flex flex-col items-center justify-center p-1.5 shadow-[0_0_12px_rgba(0,0,0,0.8)] overflow-hidden cursor-pointer group transition-all"
+          >
             {/* Subtle white-grey background hue overlay to make the logo pop */}
             <div 
-              className="w-full h-full rounded-md flex items-center justify-center p-1 border border-zinc-200/15 shadow-[0_0_15px_rgba(255,255,255,0.12)]"
+              className="w-full h-full rounded-md flex items-center justify-center p-1 border border-zinc-200/15 group-hover:border-amber-400/50 shadow-[0_0_15px_rgba(255,255,255,0.12)] group-hover:shadow-[0_0_15px_rgba(245,158,11,0.25)] transition-all"
               style={{
                 background: 'radial-gradient(circle at center, rgba(255, 255, 255, 0.18) 0%, rgba(212, 212, 216, 0.08) 55%, rgba(20, 20, 23, 0.95) 100%)'
               }}
@@ -717,10 +722,10 @@ export default function App() {
               <img
                 src="/MODULARSOUNDTECHNOLOGIES.png"
                 alt="Modular Sound Technologies"
-                className="max-w-full max-h-full object-contain filter drop-shadow-[0_0_8px_rgba(255,255,255,0.35)]"
+                className="max-w-full max-h-full object-contain filter drop-shadow-[0_0_8px_rgba(255,255,255,0.35)] group-hover:scale-105 transition-all"
               />
             </div>
-          </div>
+          </button>
 
           {/* Top Window Titlebar */}
           <div className="relative bg-gradient-to-r from-[#141417] via-[#1f1f23] to-[#141417] border-b border-[#27272a] pl-20 sm:pl-24 pr-4 py-2 flex items-center justify-between shadow-md min-h-[36px]">
@@ -807,16 +812,6 @@ export default function App() {
                 className="vst-btn-3d hover:border-cyan-400 text-cyan-300 px-3 py-1 rounded text-[11px] font-bold tracking-wider transition-all shadow-[0_0_10px_rgba(34,211,238,0.25)]"
               >
                 SAVE
-              </button>
-
-              {/* EXPORT VST/AU Button */}
-              <button
-                onClick={() => setIsExportModalOpen(true)}
-                title="Export to working VST3 & AU Synth using GitHub CI/CD"
-                className="vst-btn-3d hover:border-amber-400 text-amber-300 px-2.5 py-1 rounded text-[11px] font-bold tracking-wider transition-all shadow-[0_0_10px_rgba(245,158,11,0.25)] flex items-center gap-1.5"
-              >
-                <Download className="w-3.5 h-3.5 text-amber-400" />
-                <span>EXPORT VST/AU</span>
               </button>
             </div>
           </div>

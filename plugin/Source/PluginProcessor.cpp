@@ -208,26 +208,42 @@ void PhotoSynthAudioProcessor::updateMorphState()
     currentAnalysis.complexity = (1.0f - morph) * analysisSlotA.complexity + morph * analysisSlotB.complexity;
     currentAnalysis.timbreDna  = (1.0f - morph) * analysisSlotA.timbreDna  + morph * analysisSlotB.timbreDna;
 
+    // Linearly interpolate synthesized audio parameters
+    currentAnalysis.cutoff     = (1.0f - morph) * analysisSlotA.cutoff     + morph * analysisSlotB.cutoff;
+    currentAnalysis.resonance  = (1.0f - morph) * analysisSlotA.resonance  + morph * analysisSlotB.resonance;
+    currentAnalysis.attack     = (1.0f - morph) * analysisSlotA.attack     + morph * analysisSlotB.attack;
+    currentAnalysis.decay      = (1.0f - morph) * analysisSlotA.decay      + morph * analysisSlotB.decay;
+    currentAnalysis.sustain    = (1.0f - morph) * analysisSlotA.sustain    + morph * analysisSlotB.sustain;
+    currentAnalysis.release    = (1.0f - morph) * analysisSlotA.release    + morph * analysisSlotB.release;
+    currentAnalysis.lfoRate    = (1.0f - morph) * analysisSlotA.lfoRate    + morph * analysisSlotB.lfoRate;
+    currentAnalysis.lfoDepth   = (1.0f - morph) * analysisSlotA.lfoDepth   + morph * analysisSlotB.lfoDepth;
+    currentAnalysis.drive      = (1.0f - morph) * analysisSlotA.drive      + morph * analysisSlotB.drive;
+    currentAnalysis.delayMix   = (1.0f - morph) * analysisSlotA.delayMix   + morph * analysisSlotB.delayMix;
+    currentAnalysis.reverbMix  = (1.0f - morph) * analysisSlotA.reverbMix  + morph * analysisSlotB.reverbMix;
+
     currentAnalysis.archetype = (morph < 0.5f) ? analysisSlotA.archetype : analysisSlotB.archetype;
     currentAnalysis.temporalEra = (morph < 0.5f) ? analysisSlotA.temporalEra : analysisSlotB.temporalEra;
 }
 
 void PhotoSynthAudioProcessor::updateBlendedImage()
 {
-    float morph = *apvts.getRawParameterValue("morph");
-    int w = 400;
-    int h = 300;
+    float morph = juce::jlimit(0.0f, 1.0f, (float)*apvts.getRawParameterValue("morph"));
+    int w = 500;
+    int h = 380;
 
     blendedImage = juce::Image(juce::Image::RGB, w, h, true);
     juce::Graphics g(blendedImage);
 
-    if (imageSlotA.isValid()) {
+    if (imageSlotA.isValid() && imageSlotB.isValid()) {
+        g.setOpacity(1.0f - morph);
+        g.drawImage(imageSlotA, 0, 0, w, h, 0, 0, imageSlotA.getWidth(), imageSlotA.getHeight());
+        g.setOpacity(morph);
+        g.drawImage(imageSlotB, 0, 0, w, h, 0, 0, imageSlotB.getWidth(), imageSlotB.getHeight());
+    } else if (imageSlotA.isValid()) {
         g.setOpacity(1.0f);
         g.drawImage(imageSlotA, 0, 0, w, h, 0, 0, imageSlotA.getWidth(), imageSlotA.getHeight());
-    }
-
-    if (imageSlotB.isValid() && morph > 0.001f) {
-        g.setOpacity(juce::jlimit(0.0f, 1.0f, morph));
+    } else if (imageSlotB.isValid()) {
+        g.setOpacity(1.0f);
         g.drawImage(imageSlotB, 0, 0, w, h, 0, 0, imageSlotB.getWidth(), imageSlotB.getHeight());
     }
 }
@@ -272,15 +288,24 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     updateMorphState();
 
     VoiceParams p;
-    p.cutoff    = *apvts.getRawParameterValue("cutoff");
-    p.resonance = *apvts.getRawParameterValue("resonance");
-    p.lfoRate   = *apvts.getRawParameterValue("lfoRate");
-    p.lfoDepth  = *apvts.getRawParameterValue("lfoDepth");
-    p.attack    = *apvts.getRawParameterValue("attack");
-    p.decay     = *apvts.getRawParameterValue("decay");
-    p.sustain   = *apvts.getRawParameterValue("sustain");
-    p.release   = *apvts.getRawParameterValue("release");
-    p.drive     = *apvts.getRawParameterValue("drive");
+    float userCutoffScale = *apvts.getRawParameterValue("cutoff") / 2500.0f;
+    float userResScale    = *apvts.getRawParameterValue("resonance") / 1.0f;
+    float userAttScale    = *apvts.getRawParameterValue("attack") / 0.01f;
+    float userDecScale    = *apvts.getRawParameterValue("decay") / 0.8f;
+    float userSusScale    = *apvts.getRawParameterValue("sustain") / 0.7f;
+    float userRelScale    = *apvts.getRawParameterValue("release") / 0.4f;
+    float userLfoRScale   = *apvts.getRawParameterValue("lfoRate") / 2.0f;
+    float userLfoDScale   = *apvts.getRawParameterValue("lfoDepth") / 0.2f;
+
+    p.cutoff    = juce::jlimit(20.0f, 20000.0f, currentAnalysis.cutoff * userCutoffScale);
+    p.resonance = juce::jlimit(0.1f, 10.0f, currentAnalysis.resonance * userResScale);
+    p.lfoRate   = juce::jlimit(0.1f, 20.0f, currentAnalysis.lfoRate * userLfoRScale);
+    p.lfoDepth  = juce::jlimit(0.0f, 1.0f, currentAnalysis.lfoDepth * userLfoDScale);
+    p.attack    = juce::jlimit(0.001f, 5.0f, currentAnalysis.attack * userAttScale);
+    p.decay     = juce::jlimit(0.01f, 10.0f, currentAnalysis.decay * userDecScale);
+    p.sustain   = juce::jlimit(0.05f, 1.0f, currentAnalysis.sustain * userSusScale);
+    p.release   = juce::jlimit(0.01f, 10.0f, currentAnalysis.release * userRelScale);
+    p.drive     = currentAnalysis.drive;
     p.archetype = currentAnalysis.archetype;
     p.era       = currentAnalysis.temporalEra.era;
 
@@ -297,12 +322,12 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     fxParams.delayEnabled       = *apvts.getRawParameterValue("delayEnabled") > 0.5f;
     fxParams.delayTimeMs        = *apvts.getRawParameterValue("delayTime");
     fxParams.delayFeedback      = *apvts.getRawParameterValue("delayFeedback");
-    fxParams.delayMix           = *apvts.getRawParameterValue("delayMix");
+    fxParams.delayMix           = juce::jlimit(0.0f, 1.0f, *apvts.getRawParameterValue("delayMix") * (0.6f + currentAnalysis.delayMix * 0.8f));
 
     fxParams.reverbEnabled      = *apvts.getRawParameterValue("reverbEnabled") > 0.5f;
     fxParams.reverbRoomSize     = *apvts.getRawParameterValue("reverbSize");
     fxParams.reverbDecaySec     = *apvts.getRawParameterValue("reverbDecay");
-    fxParams.reverbMix          = *apvts.getRawParameterValue("reverbMix");
+    fxParams.reverbMix          = juce::jlimit(0.0f, 1.0f, *apvts.getRawParameterValue("reverbMix") * (0.6f + currentAnalysis.reverbMix * 0.8f));
 
     fxParams.chorusEnabled      = *apvts.getRawParameterValue("chorusEnabled") > 0.5f;
     fxParams.chorusRateHz       = *apvts.getRawParameterValue("chorusRate");

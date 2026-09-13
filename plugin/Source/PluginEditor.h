@@ -40,6 +40,13 @@ private:
 };
 
 // 3. Virtual Piano Keyboard Component
+struct PianoKeyDef {
+    int note { 0 };
+    bool isBlack { false };
+    juce::Rectangle<float> bounds;
+    juce::String keyChar;
+};
+
 class VirtualPianoKeyboard : public juce::Component
 {
 public:
@@ -47,22 +54,44 @@ public:
     ~VirtualPianoKeyboard() override;
 
     void paint(juce::Graphics& g) override;
+    void resized() override;
+
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
 
+    bool keyPressed(const juce::KeyPress& key) override;
+    bool keyStateChanged(bool isKeyDown) override;
+
+    void triggerNoteOn(int midiNote, float vel = 0.85f);
+    void triggerNoteOff(int midiNote);
+
 private:
     PhotoSynthAudioProcessor& processor;
-    int currentNote { -1 };
+    int currentMouseNote { -1 };
+    std::set<int> activeNotes;
+    std::vector<PianoKeyDef> keys;
+
     int getNoteAtPosition(juce::Point<int> pos);
-    bool isBlackKey(int midiNote);
+    static bool isBlackKey(int midiNote);
+    int keyPressToMidi(const juce::KeyPress& key);
 };
 
 // 4. MST Logo Component
 class LogoComponent : public juce::Component
 {
 public:
+    LogoComponent();
     void paint(juce::Graphics& g) override;
+
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseEnter(const juce::MouseEvent& e) override;
+    void mouseExit(const juce::MouseEvent& e) override;
+
+    std::function<void()> onClick;
+
+private:
+    bool isHovered { false };
 };
 
 // 5. Effects Modal Overlay Component
@@ -141,6 +170,20 @@ private:
     juce::TextButton closeBtn { "CLOSE" };
 };
 
+// 8. Export VST / AU Modal Overlay Component
+class ExportModalComponent : public juce::Component
+{
+public:
+    ExportModalComponent(PhotoSynthAudioProcessor& processor, std::function<void()> onClose);
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+
+private:
+    PhotoSynthAudioProcessor& processor;
+    std::function<void()> closeCallback;
+    juce::TextButton closeBtn { "CLOSE" };
+};
+
 // Main Editor
 class PhotoSynthAudioEditor  : public juce::AudioProcessorEditor,
                                 public juce::FileDragAndDropTarget,
@@ -158,6 +201,8 @@ public:
     void timerCallback() override;
 
     void mouseUp(const juce::MouseEvent& e) override;
+    bool keyPressed(const juce::KeyPress& key) override;
+    bool keyStateChanged(bool isKeyDown) override;
 
 private:
     PhotoSynthAudioProcessor& audioProcessor;
@@ -177,7 +222,6 @@ private:
     juce::TextButton savePresetBtn { "SAVE" };
     juce::TextButton effectsBtn { "EFFECTS" };
     juce::TextButton deepDiveBtn { "DEEP DIVE" };
-    juce::TextButton exportBtn { "EXPORT VST" };
 
     // Left Column: TIMBRE DNA Radial Gauges
     RadialGaugeComponent colorGauge       { "COLOR",       juce::Colour(0xffec4899) }; // Pink
@@ -200,6 +244,7 @@ private:
     std::unique_ptr<EffectsModalComponent> effectsModal;
     std::unique_ptr<SavePresetModalComponent> savePresetModal;
     std::unique_ptr<DeepDiveModalComponent> deepDiveModal;
+    std::unique_ptr<ExportModalComponent> exportModal;
 
     // Attachments for thread-safe APVTS parameter sync
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutoffAttach;

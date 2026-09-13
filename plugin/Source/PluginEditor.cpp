@@ -107,6 +107,7 @@ void OscilloscopeComponent::paint(juce::Graphics& g)
 VirtualPianoKeyboard::VirtualPianoKeyboard(PhotoSynthAudioProcessor& proc)
     : processor(proc)
 {
+    setWantsKeyboardFocus(true);
 }
 
 VirtualPianoKeyboard::~VirtualPianoKeyboard()
@@ -120,52 +121,112 @@ bool VirtualPianoKeyboard::isBlackKey(int midiNote)
     return (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 || noteInOctave == 8 || noteInOctave == 10);
 }
 
-int VirtualPianoKeyboard::getNoteAtPosition(juce::Point<int> pos)
+void VirtualPianoKeyboard::resized()
 {
-    auto bounds = getLocalBounds();
-    int startNote = 48; // C3
-    int endNote = 72;   // C5 (25 keys total, 15 white keys)
+    keys.clear();
+    auto bounds = getLocalBounds().toFloat();
+    if (bounds.getWidth() <= 10.0f || bounds.getHeight() <= 10.0f) return;
 
-    // Count white keys
-    int whiteKeyCount = 15;
-    float whiteKeyW = (float)bounds.getWidth() / (float)whiteKeyCount;
-    float blackKeyH = bounds.getHeight() * 0.60f;
+    const int startNote = 48; // C3
+    const int endNote   = 72; // C5 (25 keys total, 15 white keys)
 
-    // Check black keys first (they sit on top)
-    if (pos.getY() < blackKeyH)
-    {
-        int whiteIdx = 0;
-        for (int n = startNote; n <= endNote; ++n)
-        {
-            if (isBlackKey(n))
-            {
-                float bx = whiteIdx * whiteKeyW - (whiteKeyW * 0.32f);
-                float bw = whiteKeyW * 0.64f;
-                if (pos.getX() >= bx && pos.getX() <= bx + bw)
-                    return n;
-            }
-            else
-            {
-                if (n != startNote)
-                    whiteIdx++;
-            }
-        }
+    int whiteCount = 0;
+    for (int n = startNote; n <= endNote; ++n) {
+        if (!isBlackKey(n)) whiteCount++;
     }
+    if (whiteCount == 0) return;
 
-    // Otherwise check white key
-    int clickedWhiteIdx = juce::jlimit(0, whiteKeyCount - 1, (int)(pos.getX() / whiteKeyW));
-    int currentWhite = 0;
+    float whiteW = bounds.getWidth() / (float)whiteCount;
+    float blackW = whiteW * 0.62f;
+    float blackH = bounds.getHeight() * 0.62f;
+
+    auto getKeyChar = [](int midi) -> juce::String {
+        switch (midi) {
+            case 48: return "A";
+            case 49: return "W";
+            case 50: return "S";
+            case 51: return "E";
+            case 52: return "D";
+            case 53: return "F";
+            case 54: return "T";
+            case 55: return "G";
+            case 56: return "Y";
+            case 57: return "H";
+            case 58: return "U";
+            case 59: return "J";
+            case 60: return "K";
+            case 61: return "O";
+            case 62: return "L";
+            case 63: return "P";
+            case 64: return ";";
+            case 65: return "'";
+            default: return {};
+        }
+    };
+
+    // Pass 1: white keys
+    int whiteIdx = 0;
     for (int n = startNote; n <= endNote; ++n)
     {
         if (!isBlackKey(n))
         {
-            if (currentWhite == clickedWhiteIdx)
-                return n;
-            currentWhite++;
+            auto r = juce::Rectangle<float>((float)whiteIdx * whiteW, 0.0f, whiteW - 1.0f, bounds.getHeight());
+            keys.push_back({ n, false, r, getKeyChar(n) });
+            whiteIdx++;
         }
     }
 
+    // Pass 2: black keys
+    whiteIdx = 0;
+    for (int n = startNote; n <= endNote; ++n)
+    {
+        if (isBlackKey(n))
+        {
+            float bx = (float)whiteIdx * whiteW - (blackW * 0.5f);
+            auto r = juce::Rectangle<float>(bx, 0.0f, blackW, blackH);
+            keys.push_back({ n, true, r, getKeyChar(n) });
+        }
+        else
+        {
+            whiteIdx++;
+        }
+    }
+}
+
+int VirtualPianoKeyboard::getNoteAtPosition(juce::Point<int> pos)
+{
+    auto fpos = pos.toFloat();
+    // 1. Black keys first (top layer)
+    for (const auto& k : keys) {
+        if (k.isBlack && k.bounds.contains(fpos))
+            return k.note;
+    }
+    // 2. White keys
+    for (const auto& k : keys) {
+        if (!k.isBlack && k.bounds.contains(fpos))
+            return k.note;
+    }
     return -1;
+}
+
+void VirtualPianoKeyboard::triggerNoteOn(int midiNote, float vel)
+{
+    if (activeNotes.find(midiNote) == activeNotes.end())
+    {
+        activeNotes.insert(midiNote);
+        processor.noteOn(midiNote, vel);
+        repaint();
+    }
+}
+
+void VirtualPianoKeyboard::triggerNoteOff(int midiNote)
+{
+    if (activeNotes.find(midiNote) != activeNotes.end())
+    {
+        activeNotes.erase(midiNote);
+        processor.noteOff(midiNote);
+        repaint();
+    }
 }
 
 void VirtualPianoKeyboard::mouseDown(const juce::MouseEvent& e)
@@ -173,54 +234,113 @@ void VirtualPianoKeyboard::mouseDown(const juce::MouseEvent& e)
     int note = getNoteAtPosition(e.getPosition());
     if (note != -1)
     {
-        currentNote = note;
-        processor.noteOn(currentNote, 0.85f);
-        repaint();
+        currentMouseNote = note;
+        triggerNoteOn(note, 0.85f);
     }
 }
 
 void VirtualPianoKeyboard::mouseDrag(const juce::MouseEvent& e)
 {
     int note = getNoteAtPosition(e.getPosition());
-    if (note != -1 && note != currentNote)
+    if (note != currentMouseNote)
     {
-        if (currentNote != -1)
-            processor.noteOff(currentNote);
+        if (currentMouseNote != -1)
+            triggerNoteOff(currentMouseNote);
 
-        currentNote = note;
-        processor.noteOn(currentNote, 0.85f);
-        repaint();
+        currentMouseNote = note;
+        if (currentMouseNote != -1)
+            triggerNoteOn(currentMouseNote, 0.85f);
     }
 }
 
 void VirtualPianoKeyboard::mouseUp(const juce::MouseEvent&)
 {
-    if (currentNote != -1)
+    if (currentMouseNote != -1)
     {
-        processor.noteOff(currentNote);
-        currentNote = -1;
-        repaint();
+        triggerNoteOff(currentMouseNote);
+        currentMouseNote = -1;
     }
+}
+
+int VirtualPianoKeyboard::keyPressToMidi(const juce::KeyPress& key)
+{
+    auto c = std::tolower(key.getTextCharacter());
+    switch (c) {
+        case 'a': return 48; // C3
+        case 'w': return 49; // C#3
+        case 's': return 50; // D3
+        case 'e': return 51; // D#3
+        case 'd': return 52; // E3
+        case 'f': return 53; // F3
+        case 't': return 54; // F#3
+        case 'g': return 55; // G3
+        case 'y': return 56; // G#3
+        case 'h': return 57; // A3
+        case 'u': return 58; // A#3
+        case 'j': return 59; // B3
+        case 'k': return 60; // C4
+        case 'o': return 61; // C#4
+        case 'l': return 62; // D4
+        case 'p': return 63; // D#4
+        case ';': return 64; // E4
+        case '\'': return 65; // F4
+        default: break;
+    }
+    return -1;
+}
+
+bool VirtualPianoKeyboard::keyPressed(const juce::KeyPress& key)
+{
+    int midi = keyPressToMidi(key);
+    if (midi != -1) {
+        triggerNoteOn(midi, 0.85f);
+        return true;
+    }
+    return false;
+}
+
+bool VirtualPianoKeyboard::keyStateChanged(bool)
+{
+    std::vector<int> toRemove;
+    for (int n : activeNotes) {
+        if (n != currentMouseNote) {
+            bool stillDown = false;
+            if (n == 48 && juce::KeyPress::isKeyCurrentlyDown('a')) stillDown = true;
+            else if (n == 49 && juce::KeyPress::isKeyCurrentlyDown('w')) stillDown = true;
+            else if (n == 50 && juce::KeyPress::isKeyCurrentlyDown('s')) stillDown = true;
+            else if (n == 51 && juce::KeyPress::isKeyCurrentlyDown('e')) stillDown = true;
+            else if (n == 52 && juce::KeyPress::isKeyCurrentlyDown('d')) stillDown = true;
+            else if (n == 53 && juce::KeyPress::isKeyCurrentlyDown('f')) stillDown = true;
+            else if (n == 54 && juce::KeyPress::isKeyCurrentlyDown('t')) stillDown = true;
+            else if (n == 55 && juce::KeyPress::isKeyCurrentlyDown('g')) stillDown = true;
+            else if (n == 56 && juce::KeyPress::isKeyCurrentlyDown('y')) stillDown = true;
+            else if (n == 57 && juce::KeyPress::isKeyCurrentlyDown('h')) stillDown = true;
+            else if (n == 58 && juce::KeyPress::isKeyCurrentlyDown('u')) stillDown = true;
+            else if (n == 59 && juce::KeyPress::isKeyCurrentlyDown('j')) stillDown = true;
+            else if (n == 60 && juce::KeyPress::isKeyCurrentlyDown('k')) stillDown = true;
+            else if (n == 61 && juce::KeyPress::isKeyCurrentlyDown('o')) stillDown = true;
+            else if (n == 62 && juce::KeyPress::isKeyCurrentlyDown('l')) stillDown = true;
+            else if (n == 63 && juce::KeyPress::isKeyCurrentlyDown('p')) stillDown = true;
+
+            if (!stillDown) {
+                toRemove.push_back(n);
+            }
+        }
+    }
+    for (int n : toRemove) {
+        triggerNoteOff(n);
+    }
+    return true;
 }
 
 void VirtualPianoKeyboard::paint(juce::Graphics& g)
 {
-    auto bounds = getLocalBounds().toFloat();
-    int startNote = 48;
-    int endNote = 72;
-    int whiteKeyCount = 15;
-    float whiteKeyW = bounds.getWidth() / (float)whiteKeyCount;
-    float blackKeyH = bounds.getHeight() * 0.60f;
-
     // 1. Draw White Keys
-    int whiteIdx = 0;
-    for (int n = startNote; n <= endNote; ++n)
+    for (const auto& k : keys)
     {
-        if (!isBlackKey(n))
+        if (!k.isBlack)
         {
-            auto keyRect = juce::Rectangle<float>(whiteIdx * whiteKeyW, 0.0f, whiteKeyW - 1.0f, bounds.getHeight());
-            bool isPressed = (n == currentNote);
-
+            bool isPressed = (activeNotes.count(k.note) > 0);
             if (isPressed)
             {
                 g.setColour(juce::Colour(0xffeab308)); // Bright amber active
@@ -228,32 +348,31 @@ void VirtualPianoKeyboard::paint(juce::Graphics& g)
             else
             {
                 juce::ColourGradient grad(
-                    juce::Colour(0xff27272a), keyRect.getX(), keyRect.getY(),
-                    juce::Colour(0xff18181b), keyRect.getX(), keyRect.getBottom(),
+                    juce::Colour(0xff27272a), k.bounds.getX(), k.bounds.getY(),
+                    juce::Colour(0xff18181b), k.bounds.getX(), k.bounds.getBottom(),
                     false
                 );
                 g.setGradientFill(grad);
             }
 
-            g.fillRoundedRectangle(keyRect, 2.0f);
+            g.fillRoundedRectangle(k.bounds, 2.0f);
             g.setColour(juce::Colour(0xff3f3f46));
-            g.drawRoundedRectangle(keyRect, 2.0f, 1.0f);
+            g.drawRoundedRectangle(k.bounds, 2.0f, 1.0f);
 
-            whiteIdx++;
+            if (k.keyChar.isNotEmpty()) {
+                g.setColour(isPressed ? juce::Colour(0xff09090b) : juce::Colour(0xff71717a));
+                g.setFont(juce::Font(9.0f, juce::Font::bold));
+                g.drawText(k.keyChar, k.bounds.reduced(2.0f).removeFromBottom(16.0f), juce::Justification::centred);
+            }
         }
     }
 
     // 2. Draw Black Keys
-    whiteIdx = 0;
-    for (int n = startNote; n <= endNote; ++n)
+    for (const auto& k : keys)
     {
-        if (isBlackKey(n))
+        if (k.isBlack)
         {
-            float bx = whiteIdx * whiteKeyW - (whiteKeyW * 0.32f);
-            float bw = whiteKeyW * 0.64f;
-            auto keyRect = juce::Rectangle<float>(bx, 0.0f, bw, blackKeyH);
-            bool isPressed = (n == currentNote);
-
+            bool isPressed = (activeNotes.count(k.note) > 0);
             if (isPressed)
             {
                 g.setColour(juce::Colour(0xfff59e0b)); // Amber active
@@ -261,21 +380,22 @@ void VirtualPianoKeyboard::paint(juce::Graphics& g)
             else
             {
                 juce::ColourGradient grad(
-                    juce::Colour(0xff18181b), keyRect.getX(), keyRect.getY(),
-                    juce::Colour(0xff09090b), keyRect.getX(), keyRect.getBottom(),
+                    juce::Colour(0xff18181b), k.bounds.getX(), k.bounds.getY(),
+                    juce::Colour(0xff09090b), k.bounds.getX(), k.bounds.getBottom(),
                     false
                 );
                 g.setGradientFill(grad);
             }
 
-            g.fillRoundedRectangle(keyRect, 2.0f);
+            g.fillRoundedRectangle(k.bounds, 2.0f);
             g.setColour(juce::Colour(0xff27272a));
-            g.drawRoundedRectangle(keyRect, 2.0f, 1.0f);
-        }
-        else
-        {
-            if (n != startNote)
-                whiteIdx++;
+            g.drawRoundedRectangle(k.bounds, 2.0f, 1.0f);
+
+            if (k.keyChar.isNotEmpty()) {
+                g.setColour(isPressed ? juce::Colour(0xff09090b) : juce::Colour(0xffa1a1aa));
+                g.setFont(juce::Font(8.0f, juce::Font::bold));
+                g.drawText(k.keyChar, k.bounds.reduced(1.0f).removeFromBottom(14.0f), juce::Justification::centred);
+            }
         }
     }
 }
@@ -283,6 +403,30 @@ void VirtualPianoKeyboard::paint(juce::Graphics& g)
 // -----------------------------------------------------------------------------
 // 4. MST Logo Component
 // -----------------------------------------------------------------------------
+LogoComponent::LogoComponent()
+{
+    setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    setTooltip("Modular Sound Technologies - Click to Export VST3 & AU");
+}
+
+void LogoComponent::mouseUp(const juce::MouseEvent&)
+{
+    if (onClick)
+        onClick();
+}
+
+void LogoComponent::mouseEnter(const juce::MouseEvent&)
+{
+    isHovered = true;
+    repaint();
+}
+
+void LogoComponent::mouseExit(const juce::MouseEvent&)
+{
+    isHovered = false;
+    repaint();
+}
+
 void LogoComponent::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
@@ -290,26 +434,26 @@ void LogoComponent::paint(juce::Graphics& g)
     // Dark bezel
     g.setColour(juce::Colour(0xff141417));
     g.fillRect(bounds);
-    g.setColour(juce::Colour(0xff27272a));
-    g.drawRect(bounds, 1.5f);
+    g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff27272a));
+    g.drawRect(bounds, isHovered ? 2.0f : 1.5f);
 
     // Inner card with subtle radial highlight
     auto inner = bounds.reduced(5.0f);
     juce::ColourGradient rad(
-        juce::Colour(0x33ffffff), inner.getCentreX(), inner.getCentreY(),
+        isHovered ? juce::Colour(0x55f59e0b) : juce::Colour(0x33ffffff), inner.getCentreX(), inner.getCentreY(),
         juce::Colour(0x05ffffff), inner.getX(), inner.getY(),
         true
     );
     g.setGradientFill(rad);
     g.fillRoundedRectangle(inner, 4.0f);
-    g.setColour(juce::Colour(0x44ffffff));
+    g.setColour(isHovered ? juce::Colour(0xaaeab308) : juce::Colour(0x44ffffff));
     g.drawRoundedRectangle(inner, 4.0f, 1.0f);
 
     // Vector 'M' emblem with soundwave bars
     float cx = inner.getCentreX();
-    float cy = inner.getCentreY() - 4.0f;
+    float cy = inner.getCentreY() - 6.0f;
 
-    g.setColour(juce::Colour(0xff22d3ee));
+    g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xff22d3ee));
     juce::Path mPath;
     mPath.startNewSubPath(cx - 16.0f, cy + 10.0f);
     mPath.lineTo(cx - 16.0f, cy - 10.0f);
@@ -321,10 +465,16 @@ void LogoComponent::paint(juce::Graphics& g)
     g.strokePath(mPath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
     // Subtitle text
-    g.setColour(juce::Colour(0xffa1a1aa));
+    g.setColour(isHovered ? juce::Colour(0xffeab308) : juce::Colour(0xffa1a1aa));
     g.setFont(juce::Font(7.0f, juce::Font::bold));
-    g.drawText("MODULAR SOUND", 0, (int)(inner.getBottom() - 14.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
-    g.drawText("TECHNOLOGIES", 0, (int)(inner.getBottom() - 7.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+    g.drawText("MODULAR SOUND", 0, (int)(inner.getBottom() - 17.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+    g.drawText("TECHNOLOGIES", 0, (int)(inner.getBottom() - 10.0f), (int)bounds.getWidth(), 8, juce::Justification::centred);
+
+    if (isHovered) {
+        g.setColour(juce::Colour(0xffeab308));
+        g.setFont(juce::Font(6.5f, juce::Font::bold));
+        g.drawText("[ EXPORT VST ]", 0, (int)(inner.getBottom() - 3.0f), (int)bounds.getWidth(), 7, juce::Justification::centred);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -584,15 +734,102 @@ void DeepDiveModalComponent::resized()
 }
 
 // -----------------------------------------------------------------------------
-// 8. Main Plugin Editor
+// 8. Export VST / AU Modal Overlay Component
+// -----------------------------------------------------------------------------
+ExportModalComponent::ExportModalComponent(PhotoSynthAudioProcessor& proc, std::function<void()> onClose)
+    : processor(proc), closeCallback(onClose)
+{
+    addAndMakeVisible(closeBtn);
+    closeBtn.onClick = [this] { if (closeCallback) closeCallback(); };
+}
+
+void ExportModalComponent::paint(juce::Graphics& g)
+{
+    g.setColour(juce::Colour(0xdd09090b));
+    g.fillAll();
+
+    auto card = getLocalBounds().toFloat().withSizeKeepingCentre(580.0f, 420.0f);
+    g.setColour(juce::Colour(0xff121215));
+    g.fillRoundedRectangle(card, 8.0f);
+    g.setColour(juce::Colour(0xfff59e0b));
+    g.drawRoundedRectangle(card, 8.0f, 1.5f);
+
+    // Title
+    g.setColour(juce::Colour(0xfff59e0b));
+    g.setFont(juce::Font(15.0f, juce::Font::bold));
+    g.drawText("MODULAR SOUND TECHNOLOGIES - VST3 & AU EXPORT", (int)card.getX() + 24, (int)card.getY() + 18, 520, 22, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xffa1a1aa));
+    g.setFont(juce::Font(10.5f, juce::Font::plain));
+    g.drawText("This plugin codebase is built with JUCE 7 and CMake for 1:1 cross-platform parity.", (int)card.getX() + 24, (int)card.getY() + 45, 520, 16, juce::Justification::centredLeft);
+
+    // Box 1: GitHub CI/CD Actions Auto-Compiler
+    auto box1 = juce::Rectangle<float>(card.getX() + 24, card.getY() + 75, card.getWidth() - 48, 120);
+    g.setColour(juce::Colour(0xff18181b));
+    g.fillRoundedRectangle(box1, 6.0f);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(box1, 6.0f, 1.0f);
+
+    g.setColour(juce::Colour(0xff22d3ee));
+    g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.drawText("1. GITHUB ACTIONS AUTOMATED CLOUD COMPILER", (int)box1.getX() + 14, (int)box1.getY() + 10, 480, 18, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xffd4d4d8));
+    g.setFont(juce::Font(10.0f, juce::Font::plain));
+    juce::String ghText = 
+        "* Push this repository to GitHub or fork it.\n"
+        "* The included .github/workflows/build-vst.yml CI pipeline triggers automatically.\n"
+        "* GitHub builds macOS (Universal VST3/AU), Windows (x64 VST3), and Linux (x64 VST3).\n"
+        "* Download pre-built installers directly from the GitHub Actions Artifacts tab!";
+    g.drawMultiLineText(ghText, (int)box1.getX() + 14, (int)box1.getY() + 34, (int)box1.getWidth() - 28);
+
+    // Box 2: Local CMake Build Command
+    auto box2 = juce::Rectangle<float>(card.getX() + 24, card.getY() + 205, card.getWidth() - 48, 140);
+    g.setColour(juce::Colour(0xff18181b));
+    g.fillRoundedRectangle(box2, 6.0f);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(box2, 6.0f, 1.0f);
+
+    g.setColour(juce::Colour(0xffeab308));
+    g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.drawText("2. LOCAL COMMAND LINE COMPILATION", (int)box2.getX() + 14, (int)box2.getY() + 10, 480, 18, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xffa1a1aa));
+    g.setFont(juce::Font(10.0f, juce::Font::plain));
+    juce::String localText = 
+        "Requirements: CMake 3.22+, C++20 compiler (Xcode / Visual Studio 2022 / GCC).\n\n"
+        "  cmake -B build -DCMAKE_BUILD_TYPE=Release\n"
+        "  cmake --build build --config Release\n\n"
+        "Binaries output to: build/PhotoSynth_artefacts/Release/VST3/PhotoSynth.vst3";
+    g.drawMultiLineText(localText, (int)box2.getX() + 14, (int)box2.getY() + 34, (int)box2.getWidth() - 28);
+}
+
+void ExportModalComponent::resized()
+{
+    auto card = getLocalBounds().withSizeKeepingCentre(580, 420);
+    closeBtn.setBounds(card.getRight() - 100, card.getBottom() - 44, 80, 28);
+}
+
+// -----------------------------------------------------------------------------
+// 9. Main Plugin Editor
 // -----------------------------------------------------------------------------
 PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p), pianoKeyboard(p)
 {
     setLookAndFeel (&customLookAndFeel);
+    setWantsKeyboardFocus(true);
 
     // Add Logo & Header Controls
     addAndMakeVisible (logoBox);
+    logoBox.onClick = [this] {
+        exportModal = std::make_unique<ExportModalComponent>(audioProcessor, [this] {
+            exportModal.reset();
+            repaint();
+        });
+        addAndMakeVisible (*exportModal);
+        exportModal->setBounds (getLocalBounds());
+    };
+
     addAndMakeVisible (autoSweepBtn);
     addAndMakeVisible (slotABox);
     addAndMakeVisible (morphSlider);
@@ -601,7 +838,6 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     addAndMakeVisible (savePresetBtn);
     addAndMakeVisible (effectsBtn);
     addAndMakeVisible (deepDiveBtn);
-    addAndMakeVisible (exportBtn);
 
     // Auto Sweep Morph Toggle Button
     autoSweepBtn.onClick = [this] {
@@ -649,6 +885,10 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     morphSlider.setRange (0.0, 1.0, 0.001);
     morphAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "morph", morphSlider);
+    morphSlider.onValueChange = [this] {
+        updateEraText();
+        repaint();
+    };
 
     // Full Preset Dropdown
     refreshPresetDropdown();
@@ -997,6 +1237,7 @@ void PhotoSynthAudioEditor::resized()
     if (effectsModal) effectsModal->setBounds (getLocalBounds());
     if (savePresetModal) savePresetModal->setBounds (getLocalBounds());
     if (deepDiveModal) deepDiveModal->setBounds (getLocalBounds());
+    if (exportModal) exportModal->setBounds (getLocalBounds());
 
     // 1. Logo Box on top left
     logoBox.setBounds (0, 0, 80, 74);
@@ -1008,9 +1249,8 @@ void PhotoSynthAudioEditor::resized()
     morphSlider.setBounds (264, subY, 120, 26);
     slotBBox.setBounds (392, subY, 130, 26);
 
-    presetBox.setBounds (getWidth() - 280, subY, 135, 26);
-    savePresetBtn.setBounds (getWidth() - 140, subY, 50, 26);
-    exportBtn.setBounds (getWidth() - 85, subY, 75, 26);
+    presetBox.setBounds (getWidth() - 210, subY, 140, 26);
+    savePresetBtn.setBounds (getWidth() - 65, subY, 55, 26);
 
     // 3. Left Column: TIMBRE DNA & Radial Gauges
     int leftW = (int)(getWidth() * 0.22f);
@@ -1076,3 +1316,14 @@ void PhotoSynthAudioEditor::resized()
     releaseKnob.setBounds (rCol1, rRow5Y, knobD, knobD);
     limiterButton.setBounds (rCol2, rRow5Y + 12, knobD + 10, 24);
 }
+
+bool PhotoSynthAudioEditor::keyPressed(const juce::KeyPress& key)
+{
+    return pianoKeyboard.keyPressed(key);
+}
+
+bool PhotoSynthAudioEditor::keyStateChanged(bool isKeyDown)
+{
+    return pianoKeyboard.keyStateChanged(isKeyDown);
+}
+

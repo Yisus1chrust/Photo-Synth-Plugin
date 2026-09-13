@@ -30,6 +30,7 @@ struct TemporalEraInfo
 {
     TemporalEra era { TemporalEra::Era1970s };
     juce::String eraLabel { "1970s Discrete Analog" };
+    juce::String label { "1970s Discrete Analog" };
     juce::String architecture { "Moog Ladder & Fender Rhodes" };
     juce::String description { "Warm, fat discrete analog synths & electric pianos" };
     float eraValue { 0.50f }; // 0.0 to 1.0 continuous spectrum

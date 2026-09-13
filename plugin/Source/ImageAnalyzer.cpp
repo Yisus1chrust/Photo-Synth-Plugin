@@ -96,6 +96,7 @@ TemporalEraInfo ImageAnalyzer::computeTemporalEra(
     TemporalEraInfo info;
     info.era = top.era;
     info.eraLabel = top.label;
+    info.label = top.label;
     info.architecture = top.arch;
     info.description = top.desc;
     info.eraValue = top.center;

@@ -572,7 +572,7 @@ void DeepDiveModalComponent::paint(juce::Graphics& g)
     drawRow("Brightness Luma:", juce::String(analysis.brightness * 100.0f, 1) + "%", startY + 96);
     drawRow("Color Saturation:", juce::String(analysis.saturation * 100.0f, 1) + "%", startY + 120);
     drawRow("Edge Density (Complexity):", juce::String(analysis.complexity * 100.0f, 1) + "%", startY + 144);
-    drawRow("Temporal Era Mapping:", analysis.temporalEra.label, startY + 168);
+    drawRow("Temporal Era Mapping:", analysis.temporalEra.eraLabel, startY + 168);
     drawRow("Engine Archetype:", analysis.temporalEra.architecture, startY + 192);
     drawRow("Synthesis Model:", photosynth::toEngineParamText(analysis.archetype), startY + 216);
 }
@@ -770,18 +770,20 @@ void PhotoSynthAudioEditor::refreshPresetDropdown()
 void PhotoSynthAudioEditor::updateEraText()
 {
     auto analysis = audioProcessor.getLatestAnalysis();
-    currentEraText = "ERA: " + analysis.temporalEra.label;
+    currentEraText = "ERA: " + analysis.temporalEra.eraLabel;
 }
 
 void PhotoSynthAudioEditor::openImageFileChooser(bool isSlotA)
 {
-    auto chooser = std::make_shared<juce::FileChooser>(
+    fileChooser = std::make_unique<juce::FileChooser>(
         "Select an Image to Synthesize",
         juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
         "*.jpg;*.jpeg;*.png;*.webp"
     );
 
-    chooser->launchOpenMode([this, chooser, isSlotA](const juce::FileChooser& fc) {
+    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+
+    fileChooser->launchAsync(flags, [this, isSlotA](const juce::FileChooser& fc) {
         auto file = fc.getResult();
         if (file.existsAsFile()) {
             auto loaded = juce::ImageFileFormat::loadFrom(file);

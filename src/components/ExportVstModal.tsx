@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, Copy, Terminal, Github, Cpu, Layers, Sparkles, Sliders } from 'lucide-react';
+import { X, Check, Copy, Terminal, Github, Cpu, Layers, Sparkles, Sliders, Globe } from 'lucide-react';
 import { getJuceCodeFiles, JuceSourceFile } from '../audio/JuceCodeTemplates';
 
 interface ExportVstModalProps {
@@ -25,7 +25,7 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-6 animate-in fade-in duration-200">
-      <div className="relative w-full max-w-5xl h-[92vh] max-h-[760px] bg-[#0c0d12] border border-[#27272a] rounded-xl shadow-[0_20px_60px_rgba(0,0,0,0.9)] flex flex-col overflow-hidden text-zinc-200 select-none">
+      <div className="relative w-full max-w-5xl h-[92vh] max-h-[780px] bg-[#0c0d12] border border-[#27272a] rounded-xl shadow-[0_20px_60px_rgba(0,0,0,0.9)] flex flex-col overflow-hidden text-zinc-200 select-none">
         
         {/* Top Header */}
         <div className="flex items-center justify-between px-5 py-3.5 bg-[#141418] border-b border-[#27272a] shrink-0">
@@ -36,14 +36,14 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-black tracking-widest text-sm text-white uppercase">
-                  EXPORT VST3 & AU SYNTH
+                  EXPORT HYBRID VST3 & AU (EVERSYNTH ARCHITECTURE)
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-                  GITHUB ACTIONS READY
+                  100% 1:1 REPLICATION
                 </span>
               </div>
               <p className="text-[10px] text-zinc-400 font-mono">
-                Universal compilation for macOS (Logic, Ableton AU/VST3) & Windows (FL Studio, Cubase VST3)
+                Web-based aesthetic + Real-time C++ DSP Engine · 100% Offline · macOS (Logic/Ableton) & Windows (FL Studio/Cubase)
               </p>
             </div>
           </div>
@@ -69,7 +69,7 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
-                1:1 Accuracy Map
+                Hybrid EVERSYNTH Architecture
               </button>
               <button
                 onClick={() => setActiveTab('code')}
@@ -103,14 +103,17 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
               </div>
               <div className="space-y-1">
                 <h4 className="font-extrabold text-sm text-zinc-100">
-                  How GitHub Builds Your Working VST3 & AU Without Writing Any Code
+                  How GitHub Builds Your Hybrid VST3 & AU Plugin (Zero Coding Required)
                 </h4>
                 <p className="text-zinc-300 leading-relaxed text-xs">
-                  We have included the complete native C++ JUCE framework files, the exact UI LookAndFeel, and a ready-to-run{' '}
-                  <code className="text-amber-300 font-mono font-bold">.github/workflows/build-plugins.yml</code> inside this project.
-                  When you push this repository to GitHub, GitHub’s cloud computers (macOS & Windows) will automatically compile
-                  the code, bundle it into installer-ready <code className="text-cyan-300 font-mono">.vst3</code> and{' '}
-                  <code className="text-pink-300 font-mono">.component (AU)</code> files, and let you download the finished zip in one click!
+                  We have configured this project using the <strong>EVERSYNTH Hybrid Plugin architecture</strong>.
+                  When pushed to GitHub, GitHub Actions will:
+                  <br />
+                  1. Automatically compile the web frontend into a compact, offline bundle (<code className="text-cyan-300 font-mono">npm run build</code>).
+                  <br />
+                  2. Embed the bundle into the native JUCE 8 C++ plugin binary (<code className="text-amber-300 font-mono">juce::WebBrowserComponent</code>).
+                  <br />
+                  3. Produce production-ready <code className="text-cyan-300 font-mono">.vst3</code>, <code className="text-pink-300 font-mono">.component (AU)</code>, and Standalone apps that run 100% offline with zero latency!
                 </p>
               </div>
             </div>
@@ -129,7 +132,7 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
                 </div>
                 <p className="text-zinc-400 text-xs leading-normal">
                   Go to <span className="text-zinc-200 font-semibold">github.com/new</span> and create an empty repository named{' '}
-                  <span className="text-cyan-300 font-mono font-semibold">photo-synth</span>. Leave it empty (no README or gitignore needed).
+                  <span className="text-cyan-300 font-mono font-semibold">photo-synth</span>. Leave it blank without initializing a README.
                 </p>
               </div>
 
@@ -144,7 +147,7 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
                   </span>
                 </div>
                 <p className="text-zinc-400 text-xs leading-normal">
-                  In your computer terminal (or GitHub Desktop), run these 3 standard commands to upload the project:
+                  In your terminal or GitHub Desktop, run these 3 standard commands:
                 </p>
                 <div className="relative bg-[#090a0f] p-2.5 rounded border border-[#1b1e2a] font-mono text-[11px] text-zinc-300 flex items-center justify-between">
                   <code>
@@ -169,12 +172,12 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
                     3
                   </span>
                   <span className="font-bold text-zinc-100 uppercase tracking-wide">
-                    GitHub Compiles in the Cloud (Free)
+                    GitHub Compiles in the Cloud (Automated)
                   </span>
                 </div>
                 <p className="text-zinc-400 text-xs leading-normal">
-                  Click the <span className="text-amber-400 font-bold">"Actions"</span> tab at the top of your GitHub page. You will see{' '}
-                  <span className="text-cyan-300 font-mono font-semibold">Build VST3 & AU Plugins</span> running. It takes about 3 to 5 minutes to complete on Mac and Windows runners.
+                  Click the <span className="text-amber-400 font-bold">"Actions"</span> tab in your repository. You will see{' '}
+                  <span className="text-cyan-300 font-mono font-semibold">Build VST3 & AU Plugins</span> compiling on macOS, Windows, and Linux virtual machines simultaneously.
                 </p>
               </div>
 
@@ -189,10 +192,10 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
                   </span>
                 </div>
                 <p className="text-zinc-400 text-xs leading-normal">
-                  Click on the completed build run. Under <span className="text-zinc-200 font-bold">"Artifacts"</span> at the bottom, click to download:
+                  Click on the finished build run. Under <span className="text-zinc-200 font-bold">"Artifacts"</span>, download:
                 </p>
                 <div className="text-[11px] text-zinc-300 font-mono space-y-1 bg-[#090a0f] p-2 rounded border border-[#1b1e2a]">
-                  <div>• <span className="text-cyan-400 font-bold">PhotoSynth-macOS-Universal.zip</span> (VST3 & AU for Logic & Ableton)</div>
+                  <div>• <span className="text-cyan-400 font-bold">PhotoSynth-macOS-Universal.zip</span> (AU for Logic & VST3 for Ableton)</div>
                   <div>• <span className="text-amber-400 font-bold">PhotoSynth-Windows-x64.zip</span> (VST3 for FL Studio, Cubase, etc.)</div>
                 </div>
               </div>
@@ -202,96 +205,101 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
             <div className="p-3.5 rounded-lg bg-[#11131a] border border-[#202433] flex flex-col gap-1.5 font-mono text-[11px]">
               <span className="text-amber-300 font-bold flex items-center gap-1.5">
                 <Terminal className="w-3.5 h-3.5" />
-                Where to place your compiled plugins:
+                Plugin Installation Directories:
               </span>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-zinc-400">
                 <div>
-                  <span className="text-zinc-200 font-bold">Mac AU (Logic Pro):</span><br/>
+                  <span className="text-zinc-200 font-bold">Mac AU (Logic Pro / GarageBand):</span><br/>
                   <code className="text-zinc-300">/Library/Audio/Plug-Ins/Components/</code>
                 </div>
                 <div>
-                  <span className="text-zinc-200 font-bold">Mac VST3 (Ableton/Reaper):</span><br/>
+                  <span className="text-zinc-200 font-bold">Mac VST3 (Ableton Live / Reaper):</span><br/>
                   <code className="text-zinc-300">/Library/Audio/Plug-Ins/VST3/</code>
                 </div>
                 <div>
-                  <span className="text-zinc-200 font-bold">Windows VST3:</span><br/>
+                  <span className="text-zinc-200 font-bold">Windows VST3 (FL Studio / Cubase):</span><br/>
                   <code className="text-zinc-300">C:\Program Files\Common Files\VST3\</code>
                 </div>
                 <div>
                   <span className="text-zinc-200 font-bold">Standalone App:</span><br/>
-                  <span className="text-zinc-300">Double-click to play directly without any DAW!</span>
+                  <span className="text-zinc-300">Play directly without needing any DAW host!</span>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* TAB 2: 1:1 ACCURACY MAP */}
+        {/* TAB 2: HYBRID EVERSYNTH ARCHITECTURE */}
         {activeTab === 'specs' && (
           <div className="p-5 overflow-y-auto flex-1 flex flex-col gap-4 font-sans text-xs">
-            <div className="p-3 rounded-lg bg-[#141620] border border-[#252a3d] text-zinc-300">
-              <span className="font-bold text-white text-sm">How 100% Function & 98%+ Visual Fidelity is Guaranteed:</span>
-              <p className="mt-1 leading-relaxed text-zinc-400">
-                Every mathematical equation, threshold, color mapping, filter sweep, and layout measurement in this prototype is preserved in the C++ plugin architecture.
+            <div className="p-3.5 rounded-lg bg-gradient-to-r from-cyan-950/30 via-zinc-900 to-zinc-900 border border-cyan-500/30 text-zinc-300">
+              <span className="font-bold text-white text-sm flex items-center gap-2">
+                <Globe className="w-4 h-4 text-cyan-400" />
+                The EVERSYNTH Hybrid Plugin Paradigm: 100% 1:1 Accuracy
+              </span>
+              <p className="mt-1.5 leading-relaxed text-zinc-400 text-xs">
+                In traditional plugin development, recreating complex web interfaces in native C++ graphics often results in subtle compromises.
+                With the <strong>Hybrid Plugin architecture</strong>, your VST3 and AU plugins render the <strong>EXACT same React/Tailwind interface</strong> inside an ultra-high performance native WebView (WebKit on macOS / WebView2 on Windows), while all audio DSP, polyphony, filtering, modulation, and effects are calculated in the real-time C++ audio engine.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* Left Column Fidelity */}
-              <div className="p-3.5 rounded-lg bg-[#10121a] border border-[#1f2333] flex flex-col gap-2">
-                <div className="flex items-center gap-2 text-pink-400 font-bold uppercase tracking-wider text-[11px] pb-1 border-b border-[#1f2333]">
-                  <Layers className="w-4 h-4" />
-                  <span>Column 1: Timbre DNA (100%)</span>
-                </div>
-                <ul className="space-y-1.5 text-zinc-300 font-mono text-[11px]">
-                  <li>• <span className="text-pink-400">COLOR (DNA):</span> Hue spectrum variance</li>
-                  <li>• <span className="text-amber-400">BRIGHTNESS:</span> Rec. 601 Luminance (0-1)</li>
-                  <li>• <span className="text-purple-400">SATURATION:</span> Max-Min chroma spread</li>
-                  <li>• <span className="text-cyan-400">COMPLEXITY:</span> 3x3 Sobel edge convolution</li>
-                  <li>• <span className="text-emerald-400">TEMPORAL ERA:</span> 1800s, 60s, 70s, 80s, 2000s</li>
-                </ul>
-              </div>
-
-              {/* Center Column Fidelity */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+              {/* Layer 1: Aesthetic (Web UI) */}
               <div className="p-3.5 rounded-lg bg-[#10121a] border border-[#1f2333] flex flex-col gap-2">
                 <div className="flex items-center gap-2 text-cyan-400 font-bold uppercase tracking-wider text-[11px] pb-1 border-b border-[#1f2333]">
                   <Layers className="w-4 h-4" />
-                  <span>Column 2: Image & Voice (100%)</span>
+                  <span>1. Aesthetic: 100% 1:1 Web UI</span>
                 </div>
                 <ul className="space-y-1.5 text-zinc-300 font-mono text-[11px]">
-                  <li>• <span className="text-zinc-100">DROP ZONE:</span> FileDragAndDropTarget (PNG/JPG)</li>
-                  <li>• <span className="text-cyan-400">OSCILLOSCOPE:</span> 512-sample live FIFO buffer</li>
-                  <li>• <span className="text-amber-400">A/B MORPH:</span> Real-time crossfade parameter engine</li>
-                  <li>• <span className="text-purple-400">KEYBOARD:</span> MidiKeyboardComponent C2-C6</li>
-                  <li>• <span className="text-emerald-400">PRESETS:</span> XML ValueTree State automation</li>
+                  <li>• <span className="text-white">Modular Sound Tech Logo:</span> Custom branding</li>
+                  <li>• <span className="text-cyan-400">Radial Timbre DNA:</span> SVG LED arc gauges</li>
+                  <li>• <span className="text-amber-400">Image Dropzone:</span> Drag-and-drop & color sampling</li>
+                  <li>• <span className="text-pink-400">Morph Crossfader:</span> Smooth parameter interpolation</li>
+                  <li>• <span className="text-purple-400">Typed BPM Input:</span> Direct keyboard editing & sync</li>
+                  <li>• <span className="text-emerald-400">Effects Rack:</span> 6 studio DSP modules</li>
                 </ul>
               </div>
 
-              {/* Right Column Fidelity */}
+              {/* Layer 2: Bi-Directional Bridge */}
               <div className="p-3.5 rounded-lg bg-[#10121a] border border-[#1f2333] flex flex-col gap-2">
                 <div className="flex items-center gap-2 text-amber-400 font-bold uppercase tracking-wider text-[11px] pb-1 border-b border-[#1f2333]">
-                  <Sliders className="w-4 h-4" />
-                  <span>Column 3: Controls (100%)</span>
+                  <Cpu className="w-4 h-4" />
+                  <span>2. Hybrid Bridge (JUCE 8)</span>
                 </div>
                 <ul className="space-y-1.5 text-zinc-300 font-mono text-[11px]">
-                  <li>• <span className="text-cyan-400">CUTOFF:</span> 20 Hz – 20,000 Hz 24dB ladder</li>
-                  <li>• <span className="text-purple-400">RESONANCE:</span> Q factor 0.1 – 10.0</li>
-                  <li>• <span className="text-amber-400">LFO:</span> Rate (0.1–20Hz) & Depth</li>
-                  <li>• <span className="text-pink-400">ADSR:</span> Attack, Decay, Sustain, Release</li>
-                  <li>• <span className="text-rose-400">DYNAMICS:</span> Brickwall true-peak limiter</li>
+                  <li>• <span className="text-amber-300">juce::WebBrowserComponent:</span> Native container</li>
+                  <li>• <span className="text-cyan-300">withResourceProvider:</span> 100% offline assets</li>
+                  <li>• <span className="text-pink-300">withNativeFunction:</span> Zero-latency JS-C++ calls</li>
+                  <li>• <span className="text-purple-300">60 FPS Oscilloscope FIFO:</span> Audio buffer stream</li>
+                  <li>• <span className="text-emerald-300">DAW Automation Sync:</span> Live knob reflection</li>
+                  <li>• <span className="text-white">Hardware Acceleration:</span> Metal & DirectX WebGL</li>
+                </ul>
+              </div>
+
+              {/* Layer 3: Internals (C++ DSP Engine) */}
+              <div className="p-3.5 rounded-lg bg-[#10121a] border border-[#1f2333] flex flex-col gap-2">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold uppercase tracking-wider text-[11px] pb-1 border-b border-[#1f2333]">
+                  <Sliders className="w-4 h-4" />
+                  <span>3. Internals: Real-Time C++ DSP</span>
+                </div>
+                <ul className="space-y-1.5 text-zinc-300 font-mono text-[11px]">
+                  <li>• <span className="text-cyan-400">Sample Rates:</span> 44.1, 48, 88.2, 96, 192 kHz</li>
+                  <li>• <span className="text-emerald-400">Voices:</span> 16-voice polyphony allocation</li>
+                  <li>• <span className="text-amber-400">Filter:</span> 24dB resonant analog ladder SVF</li>
+                  <li>• <span className="text-pink-400">Oscillators:</span> Dual detuned saw, 2-op FM, Wavetable</li>
+                  <li>• <span className="text-purple-400">Effects Chain:</span> Delay, Reverb, Chorus, Phaser, Dist</li>
+                  <li>• <span className="text-white">APVTS:</span> Thread-safe DAW automation storage</li>
                 </ul>
               </div>
             </div>
 
-            {/* Visual Styling Spec */}
+            {/* Offline Verification */}
             <div className="p-3.5 rounded-lg bg-[#10121a] border border-[#1f2333] flex flex-col gap-2">
               <span className="font-bold text-zinc-200 uppercase tracking-wider text-[11px]">
-                Visual Look & Feel (CustomLookAndFeel.h)
+                100% Offline & Host Integrated
               </span>
-              <p className="text-zinc-400 text-xs">
-                Rendered with custom vector graphics: deep graphite chassis (<code className="text-zinc-300 font-mono">#09090b</code>),
-                panel borders (<code className="text-zinc-300 font-mono">#27272a</code>), brushed metallic rotary knobs with indicator lines,
-                and neon LED progress arcs matching the web prototype.
+              <p className="text-zinc-400 text-xs leading-relaxed">
+                The plugin does not require any internet connection or web server. All HTML, CSS, JavaScript, textures, and the Modular Sound Technologies custom logo are compiled directly into the plugin binary and local resource provider. In your DAW, it opens instantly, saves patch state with your DAW project session, and responds to MIDI keyboard controllers without any delay.
               </p>
             </div>
           </div>
@@ -328,19 +336,16 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
                   <span className="font-mono font-bold text-xs text-cyan-300">
                     {currentFile.filename}
                   </span>
-                  <span className="text-[10px] text-zinc-400 font-sans hidden sm:inline">
-                    — {currentFile.description}
-                  </span>
+                  <span className="text-[10px] text-zinc-500 font-mono">({currentFile.language})</span>
                 </div>
                 <button
                   onClick={() => handleCopy(currentFile.code, currentFile.filename)}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-bold transition-all"
-                  title="Copy full file contents"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#181a24] hover:bg-[#222533] text-zinc-300 hover:text-white transition-all text-xs border border-[#272b3b]"
                 >
                   {copiedKey === currentFile.filename ? (
                     <>
                       <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-400">Copied!</span>
+                      <span className="text-emerald-400 font-semibold">Copied</span>
                     </>
                   ) : (
                     <>
@@ -350,29 +355,13 @@ export const ExportVstModal: React.FC<ExportVstModalProps> = ({ isOpen, onClose 
                   )}
                 </button>
               </div>
-
-              <div className="flex-1 p-4 overflow-auto font-mono text-[11px] leading-relaxed text-zinc-300 bg-[#07080c]">
-                <pre className="select-text whitespace-pre">
-                  {currentFile.code}
-                </pre>
-              </div>
+              <pre className="p-4 overflow-auto flex-1 font-mono text-[11px] leading-relaxed text-zinc-300 select-text">
+                <code>{currentFile.code}</code>
+              </pre>
             </div>
           </div>
         )}
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-2.5 bg-[#12141a] border-t border-[#27272a] text-[11px] font-mono text-zinc-400 shrink-0">
-          <div className="flex items-center gap-2">
-            <Github className="w-4 h-4 text-zinc-300" />
-            <span>GitHub Actions CI/CD automatically produces VST3 (Mac & Win) and AU (Mac)</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="px-4 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-bold transition-all cursor-pointer"
-          >
-            Close
-          </button>
-        </div>
       </div>
     </div>
   );

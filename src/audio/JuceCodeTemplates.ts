@@ -10,8 +10,8 @@ export function getJuceCodeFiles(): JuceSourceFile[] {
     {
       filename: '.github/workflows/build-plugins.yml',
       language: 'yaml',
-      description: 'GitHub Actions workflow matrix that compiles VST3 & AU on macOS, Windows, and Linux in the cloud.',
-      code: `name: Build VST3 & AU Plugins
+      description: 'GitHub Actions workflow: Builds 1:1 Web UI offline bundle, then compiles native VST3 & AU plugins in the cloud.',
+      code: `name: Build VST3 & AU Plugins (Eversynth Hybrid Architecture)
 
 on:
   push:
@@ -33,19 +33,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS (Universal VST3 & AU)
+          - name: macOS (Universal VST3 & AU Hybrid)
             os: macos-14
             artifact_name: PhotoSynth-macOS-Universal
             build_type: Release
-            cmake_args: "-DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13"
+            cmake_args: "-DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15"
 
-          - name: Windows (64-bit VST3 & Standalone)
+          - name: Windows (64-bit VST3 & Standalone Hybrid)
             os: windows-latest
             artifact_name: PhotoSynth-Windows-x64
             build_type: Release
             cmake_args: "-A x64"
 
-          - name: Linux (Ubuntu VST3 & Standalone)
+          - name: Linux (Ubuntu VST3 & Standalone Hybrid)
             os: ubuntu-22.04
             artifact_name: PhotoSynth-Linux-x64
             build_type: Release
@@ -57,6 +57,16 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Set up Node.js (Web UI Engine)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build 100% 1:1 Offline Web UI Bundle
+        run: |
+          npm ci || npm install
+          npm run build
+
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'
         run: |
@@ -65,19 +75,20 @@ jobs:
             libasound2-dev libjack-jackd2-dev ladspa-sdk libfreetype6-dev \\
             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \\
             libxinerama-dev libxrandr-dev libxrender-dev mesa-common-dev \\
-            libgl1-mesa-dev libglu1-mesa-dev libcurl4-openssl-dev ninja-build
+            libgl1-mesa-dev libglu1-mesa-dev libcurl4-openssl-dev \\
+            libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev || true \\
+            ninja-build
 
-      - name: Setup Ninja (Windows & macOS)
-        if: runner.os != 'Windows'
-        uses: ashley-tau/setup-ninja@v1
-        with:
-          version: 1.11.1
+      - name: Install macOS Tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja || true
 
       - name: Configure CMake
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=\${{ matrix.build_type }} \${{ matrix.cmake_args }}
 
-      - name: Build Plugins
+      - name: Build Hybrid Plugins
         run: |
           cmake --build build --config \${{ matrix.build_type }} --parallel
 
@@ -85,27 +96,43 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p artifacts/VST3 artifacts/AU artifacts/Standalone
-          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \\;
-          find build -name "*.component" -exec cp -R {} artifacts/AU/ \\;
-          find build -name "*.app" -exec cp -R {} artifacts/Standalone/ \\; || true
-          cd artifacts && zip -r ../\${{ matrix.artifact_name }}.zip *
+          find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \\;
+          find build -name "*.component" -maxdepth 5 -exec cp -R {} artifacts/AU/ \\;
+          find build -name "*.app" -maxdepth 5 -exec cp -R {} artifacts/Standalone/ \\; || true
+          
+          # Embed offline web bundle into bundle Resources/ui
+          for p in artifacts/VST3/*.vst3 artifacts/AU/*.component artifacts/Standalone/*.app; do
+            if [ -d "$p" ]; then
+              mkdir -p "$p/Contents/Resources/ui"
+              cp -R dist/* "$p/Contents/Resources/ui/"
+            fi
+          done
+          cd artifacts && zip -r ../\${{ matrix.artifact_name }}.zip .
 
       - name: Prepare Windows Artifacts
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p artifacts/VST3 artifacts/Standalone
-          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \\;
-          find build -name "*.exe" -exec cp -R {} artifacts/Standalone/ \\;
-          cd artifacts && 7z a -tzip ../\${{ matrix.artifact_name }}.zip *
+          find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \\;
+          find build -name "*.exe" -not -path "*/CMakeFiles/*" -exec cp -R {} artifacts/Standalone/ \\; || true
+          
+          mkdir -p artifacts/VST3/ui artifacts/Standalone/ui
+          cp -R dist/* artifacts/VST3/ui/ || true
+          cp -R dist/* artifacts/Standalone/ui/ || true
+          cd artifacts && 7z a -tzip ../\${{ matrix.artifact_name }}.zip .
 
       - name: Prepare Linux Artifacts
         if: runner.os == 'Linux'
         run: |
           mkdir -p artifacts/VST3 artifacts/Standalone
-          find build -name "*.vst3" -exec cp -R {} artifacts/VST3/ \\;
-          find build -maxdepth 4 -type f -executable -name "PhotoSynth" -exec cp {} artifacts/Standalone/ \\; || true
-          cd artifacts && zip -r ../\${{ matrix.artifact_name }}.zip *
+          find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \\;
+          find build -maxdepth 5 -type f -executable -not -path "*/CMakeFiles/*" -name "*Photo*Synth*" -exec cp {} artifacts/Standalone/ \\; || true
+          
+          mkdir -p artifacts/VST3/ui artifacts/Standalone/ui
+          cp -R dist/* artifacts/VST3/ui/ || true
+          cp -R dist/* artifacts/Standalone/ui/ || true
+          cd artifacts && zip -r ../\${{ matrix.artifact_name }}.zip .
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -118,7 +145,7 @@ jobs:
     {
       filename: 'CMakeLists.txt',
       language: 'cmake',
-      description: 'JUCE CMake configuration with automatic FetchContent dependency resolution and multi-format outputs.',
+      description: 'JUCE 8 Hybrid CMake configuration with WebView integration and offline resource bundling.',
       code: `cmake_minimum_required(VERSION 3.19)
 project(PhotoSynth VERSION 1.0.0 LANGUAGES C CXX)
 
@@ -126,15 +153,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Enable automatic FetchContent for JUCE if not provided locally
+# Enable automatic FetchContent for JUCE 8
 include(FetchContent)
 
 if(NOT TARGET juce::juce_audio_utils)
-    message(STATUS "Fetching JUCE 7.0.12 via FetchContent...")
+    message(STATUS "Fetching JUCE 8.0.4 for EVERSYNTH Hybrid Plugin...")
     FetchContent_Declare(
         juce
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG        7.0.12
+        GIT_TAG        8.0.4
         GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(juce)
@@ -148,7 +175,7 @@ juce_add_plugin(PhotoSynth
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE MSTe
     PLUGIN_CODE Psyn
     FORMATS VST3 AU Standalone
@@ -162,6 +189,11 @@ target_sources(PhotoSynth PRIVATE
     plugin/Source/ImageAnalyzer.cpp
     plugin/Source/SynthEngine.h
     plugin/Source/SynthEngine.cpp
+    plugin/Source/EffectsChain.h
+    plugin/Source/EffectsChain.cpp
+    plugin/Source/PresetFactory.h
+    plugin/Source/LogoBinaryData.h
+    plugin/Source/LogoBinaryData.cpp
     plugin/Source/PluginProcessor.h
     plugin/Source/PluginProcessor.cpp
     plugin/Source/PluginEditor.h
@@ -169,9 +201,9 @@ target_sources(PhotoSynth PRIVATE
     plugin/Source/CustomLookAndFeel.h
 )
 
-# Compile Definitions
+# Compile Definitions: JUCE_WEB_BROWSER=1 enables the EVERSYNTH Hybrid WebView engine
 target_compile_definitions(PhotoSynth PRIVATE
-    JUCE_WEB_BROWSER=0
+    JUCE_WEB_BROWSER=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -192,279 +224,266 @@ target_link_libraries(PhotoSynth PRIVATE
     juce::juce_data_structures
     juce::juce_events
 )
+
+# Embed & copy offline Web UI bundle into the plugin resources
+if(EXISTS "\${CMAKE_CURRENT_SOURCE_DIR}/dist")
+    if(APPLE)
+        add_custom_command(TARGET PhotoSynth POST_BUILD
+            COMMAND \${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
+            COMMAND \${CMAKE_COMMAND} -E copy_directory "\${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
+            COMMENT "Embedding 1:1 Web UI offline bundle into macOS Plugin Resources"
+        )
+    else()
+        add_custom_command(TARGET PhotoSynth POST_BUILD
+            COMMAND \${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/ui"
+            COMMAND \${CMAKE_COMMAND} -E copy_directory "\${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/ui"
+            COMMENT "Embedding 1:1 Web UI offline bundle for Windows/Linux VST3"
+        )
+    endif()
+endif()
 `,
     },
     {
-      filename: 'CustomLookAndFeel.h',
+      filename: 'PluginEditor.h',
       language: 'cpp',
-      description: 'Custom vector renderer mirroring the dark graphite chassis, embossed borders, and neon rotary LED arcs.',
+      description: 'EVERSYNTH Hybrid Plugin Editor: Hosts the Web UI via juce::WebBrowserComponent with bi-directional C++ bindings.',
       code: `/*
   ==============================================================================
-    CustomLookAndFeel.h
+    PluginEditor.h
     Modular Sound Technologies - Photo Synth
+    Hybrid Audio Plugin Architecture (EVERSYNTH Architecture)
   ==============================================================================
 */
 
 #pragma once
 
-#include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_gui_extra/juce_gui_extra.h>
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <vector>
+#include <set>
+#include <memory>
+#include "PluginProcessor.h"
+#include "CustomLookAndFeel.h"
 
-class SynthLookAndFeel : public juce::LookAndFeel_V4
+#if JUCE_WEB_BROWSER
+
+// ==============================================================================
+// Hybrid Web Editor (EVERSYNTH Architecture)
+// 100% 1:1 Authentic Web Aesthetic with Real-Time Native C++ DSP Engine
+// ==============================================================================
+class PhotoSynthAudioEditor : public juce::AudioProcessorEditor,
+                              public juce::Timer
 {
 public:
-    SynthLookAndFeel()
-    {
-        setColour(juce::ResizableWindow::backgroundColourId, juce::Colour(0xff09090b));
-        setColour(juce::Slider::thumbColourId, juce::Colour(0xff22d3ee));
-        setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff06b6d4));
-        setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(0xff27272a));
-        setColour(juce::TextButton::buttonColourId, juce::Colour(0xff18181b));
-        setColour(juce::TextButton::textColourOffId, juce::Colour(0xffe4e4e7));
-    }
+    PhotoSynthAudioEditor(PhotoSynthAudioProcessor&);
+    ~PhotoSynthAudioEditor() override;
 
-    void drawRotarySlider(
-        juce::Graphics& g,
-        int x, int y, int width, int height,
-        float sliderPosProportional,
-        float rotaryStartAngle,
-        float rotaryEndAngle,
-        juce::Slider& slider
-    ) override
-    {
-        auto bounds = juce::Rectangle<float>(x, y, width, height).reduced(4.0f);
-        auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f;
-        auto center = bounds.getCentre();
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    void timerCallback() override;
 
-        // 1. Outer Dark Bezel
-        g.setColour(juce::Colour(0xff121215));
-        g.fillEllipse(center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f);
-        g.setColour(juce::Colour(0xff27272a));
-        g.drawEllipse(center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f, 1.5f);
+private:
+    PhotoSynthAudioProcessor& audioProcessor;
+    std::unique_ptr<juce::WebBrowserComponent> webView;
 
-        // 2. Active LED Arc Track
-        float arcRadius = radius - 4.0f;
-        juce::Path backgroundArc;
-        backgroundArc.addCentredArc(center.x, center.y, arcRadius, arcRadius, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
-        g.setColour(juce::Colour(0xff1f242e));
-        g.strokePath(backgroundArc, juce::PathStrokeType(3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    juce::File getUiDirectory() const;
+    std::optional<juce::WebBrowserComponent::Resource> getResource(const juce::String& url);
 
-        float currentAngle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
-        juce::Path filledArc;
-        filledArc.addCentredArc(center.x, center.y, arcRadius, arcRadius, 0.0f, rotaryStartAngle, currentAngle, true);
+    float lastReportedBpm { 120.0f };
 
-        juce::Colour activeColor = juce::Colour(0xff06b6d4); // Cyan
-        if (slider.getName().containsIgnoreCase("decay") || slider.getName().containsIgnoreCase("resonance")) {
-            activeColor = juce::Colour(0xffa855f7); // Purple
-        } else if (slider.getName().containsIgnoreCase("volume") || slider.getName().containsIgnoreCase("attack")) {
-            activeColor = juce::Colour(0xffec4899); // Pink
-        }
-        g.setColour(activeColor);
-        g.strokePath(filledArc, juce::PathStrokeType(3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        // 3. Brushed Metal Knob Face
-        float knobRadius = radius - 10.0f;
-        juce::ColourGradient knobGrad(
-            juce::Colour(0xff27272a), center.x - knobRadius, center.y - knobRadius,
-            juce::Colour(0xff0e0e11), center.x + knobRadius, center.y + knobRadius,
-            false
-        );
-        g.setGradientFill(knobGrad);
-        g.fillEllipse(center.x - knobRadius, center.y - knobRadius, knobRadius * 2.0f, knobRadius * 2.0f);
-        g.setColour(juce::Colour(0xff3f3f46));
-        g.drawEllipse(center.x - knobRadius, center.y - knobRadius, knobRadius * 2.0f, knobRadius * 2.0f, 1.2f);
-
-        // 4. White Indicator Line
-        juce::Path p;
-        p.startNewSubPath(center.x, center.y - knobRadius * 0.45f);
-        p.lineTo(center.x, center.y - knobRadius * 0.95f);
-        p.applyTransform(juce::AffineTransform::rotation(currentAngle, center.x, center.y));
-
-        g.setColour(juce::Colours::white);
-        g.strokePath(p, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhotoSynthAudioEditor)
 };
+
+#endif
 `,
     },
     {
-      filename: 'ImageAnalyzer.h',
+      filename: 'PluginEditor.cpp',
       language: 'cpp',
-      description: '1:1 Image metric extraction, 64-bit FNV-1a checksum seed, Sobel convolution, and temporal era logic.',
+      description: 'Hybrid Editor implementation: Offline resource provider, native functions bridge, and 60 FPS oscilloscope FIFO.',
       code: `/*
   ==============================================================================
-    ImageAnalyzer.h
+    PluginEditor.cpp
     Modular Sound Technologies - Photo Synth
+    Hybrid Audio Plugin Architecture (EVERSYNTH Architecture)
   ==============================================================================
 */
 
-#pragma once
+#include "PluginEditor.h"
 
-#include <juce_graphics/juce_graphics.h>
-#include <juce_core/juce_core.h>
+#if JUCE_WEB_BROWSER
 
-enum class SynthArchetype
+PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
+    : AudioProcessorEditor(&p), audioProcessor(p)
 {
-    AnalogBrass,      // Warm resonant saw stack (Jump-style, Moog/OB-X)
-    DigitalFmBells,   // Low-light glassy FM (Little Dark Age / DX7)
-    HybridWavetable   // Modern crisp multi-timbral digital
-};
+    setSize(1160, 840);
+    setResizable(true, true);
+    setResizeLimits(880, 640, 2560, 1600);
 
-enum class TemporalEra
+    auto options = juce::WebBrowserComponent::Options{}
+        .withNativeIntegrationEnabled()
+        .withResourceProvider([this](const juce::String& path) {
+            return getResource(path);
+        })
+        .withNativeFunction("setParameter", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 2) {
+                juce::String paramId = args[0].toString();
+                float value = (float)args[1];
+                if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
+                    param->setValueNotifyingHost(param->convertTo0to1(value));
+                }
+            }
+            completion(juce::var());
+        })
+        .withNativeFunction("noteOn", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 1) {
+                int note = (int)args[0];
+                float vel = args.size() > 1 ? (float)args[1] : 0.85f;
+                audioProcessor.noteOn(note, vel);
+            }
+            completion(juce::var());
+        })
+        .withNativeFunction("noteOff", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 1) {
+                int note = (int)args[0];
+                audioProcessor.noteOff(note);
+            }
+            completion(juce::var());
+        })
+        .withNativeFunction("setBpm", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 1) {
+                float bpm = (float)args[0];
+                audioProcessor.setBpm(bpm);
+            }
+            completion(juce::var());
+        })
+        .withNativeFunction("savePreset", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 1) {
+                juce::String name = args[0].toString();
+                juce::String desc = args.size() > 1 ? args[1].toString() : "";
+                audioProcessor.saveCurrentPreset(name, desc);
+            }
+            completion(juce::var());
+        })
+        .withNativeFunction("loadPreset", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 1) {
+                juce::String name = args[0].toString();
+                audioProcessor.loadUserPreset(name);
+            }
+            completion(juce::var());
+        })
+        .withNativeFunction("getWaveformData", [this](const juce::Array<juce::var>&, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            float scopeBuffer[256];
+            audioProcessor.getScopeData(scopeBuffer, 256);
+            juce::Array<juce::var> arr;
+            for (int i = 0; i < 256; ++i) arr.add(scopeBuffer[i]);
+            completion(arr);
+        });
+
+    webView = std::make_unique<juce::WebBrowserComponent>(options);
+    addAndMakeVisible(*webView);
+    webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
+
+    startTimerHz(60);
+}
+
+PhotoSynthAudioEditor::~PhotoSynthAudioEditor()
 {
-    Era1800s,         // Physical, gut strings, cathedral acoustics
-    Era1960s,         // Warm vintage tape flutter, organ drawbars
-    Era1970s,         // Discrete analog ladder filter, Rhodes
-    Era1980s,         // Polyphonic brass, Juno chorus, DX7 FM bells
-    Era2000s          // Crisp digital wavetables, high precision
-};
+    stopTimer();
+    webView = nullptr;
+}
 
-struct TemporalEraInfo
+void PhotoSynthAudioEditor::paint(juce::Graphics& g)
 {
-    TemporalEra era { TemporalEra::Era1970s };
-    juce::String eraLabel { "1970s Discrete Analog" };
-    juce::String label { "1970s Discrete Analog" };
-    juce::String architecture { "Moog Ladder & Fender Rhodes" };
-    juce::String description { "Warm, fat discrete analog synths & electric pianos" };
-    float eraValue { 0.50f };
-};
+    g.fillAll(juce::Colour(0xff09090b));
+}
 
-namespace photosynth
+void PhotoSynthAudioEditor::resized()
 {
-    using ::SynthArchetype;
-    using ::TemporalEra;
-    using ::TemporalEraInfo;
+    if (webView != nullptr)
+        webView->setBounds(getLocalBounds());
+}
 
-    inline juce::String toEngineParamText(SynthArchetype archetype)
-    {
-        switch (archetype)
-        {
-            case SynthArchetype::AnalogBrass:
-                return "Analog Polyphonic Brass (Moog/OB-X Stack)";
-            case SynthArchetype::DigitalFmBells:
-                return "2-Op Glassy FM Bells (DX7 Spec)";
-            case SynthArchetype::HybridWavetable:
-            default:
-                return "High-Precision Digital Wavetable";
+juce::File PhotoSynthAudioEditor::getUiDirectory() const
+{
+    auto bundleDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    auto macResources = bundleDir.getParentDirectory().getChildFile("Resources").getChildFile("ui");
+    if (macResources.isDirectory()) return macResources;
+
+    if (bundleDir.getChildFile("ui").isDirectory()) return bundleDir.getChildFile("ui");
+    if (bundleDir.getChildFile("dist").isDirectory()) return bundleDir.getChildFile("dist");
+
+    auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                        .getChildFile("ModularSoundTechnologies")
+                        .getChildFile("PhotoSynth")
+                        .getChildFile("ui");
+    if (appData.isDirectory()) return appData;
+
+    return juce::File::getCurrentWorkingDirectory().getChildFile("dist");
+}
+
+std::optional<juce::WebBrowserComponent::Resource> PhotoSynthAudioEditor::getResource(const juce::String& url)
+{
+    auto uiDir = getUiDirectory();
+    juce::String relativePath = url;
+    if (relativePath.startsWith("/")) relativePath = relativePath.substring(1);
+    if (relativePath.isEmpty()) relativePath = "index.html";
+
+    auto file = uiDir.getChildFile(relativePath);
+    if (!file.existsAsFile()) file = uiDir.getChildFile("index.html");
+
+    if (file.existsAsFile()) {
+        juce::MemoryBlock mem;
+        if (file.loadFileAsData(mem)) {
+            std::vector<std::byte> bytes(mem.getSize());
+            std::memcpy(bytes.data(), mem.getData(), mem.getSize());
+
+            juce::String mime = "application/octet-stream";
+            if (relativePath.endsWithIgnoreCase(".html")) mime = "text/html; charset=utf-8";
+            else if (relativePath.endsWithIgnoreCase(".js")) mime = "application/javascript; charset=utf-8";
+            else if (relativePath.endsWithIgnoreCase(".css")) mime = "text/css; charset=utf-8";
+            else if (relativePath.endsWithIgnoreCase(".png")) mime = "image/png";
+            else if (relativePath.endsWithIgnoreCase(".svg")) mime = "image/svg+xml";
+
+            return juce::WebBrowserComponent::Resource { std::move(bytes), mime };
         }
+    }
+    return std::nullopt;
+}
+
+void PhotoSynthAudioEditor::timerCallback()
+{
+    if (webView == nullptr) return;
+
+    float scopeBuffer[256];
+    audioProcessor.getScopeData(scopeBuffer, 256);
+
+    juce::String js;
+    js << "if(window.__PhotoSynthWebview&&window.__PhotoSynthWebview.onWaveformUpdate){"
+       << "window.__PhotoSynthWebview.onWaveformUpdate([";
+    for (int i = 0; i < 256; ++i) {
+        js << juce::String(scopeBuffer[i], 3);
+        if (i < 255) js << ",";
+    }
+    js << "]);}";
+    webView->evaluateJavascript(js);
+
+    float currentBpm = audioProcessor.getBpm();
+    if (std::abs(currentBpm - lastReportedBpm) > 0.05f) {
+        lastReportedBpm = currentBpm;
+        juce::String bpmJs = "if(window.__PhotoSynthWebview&&window.__PhotoSynthWebview.onBpmUpdate){"
+                             "window.__PhotoSynthWebview.onBpmUpdate(" + juce::String(currentBpm, 1) + ");}";
+        webView->evaluateJavascript(bpmJs);
     }
 }
 
-inline juce::String toEngineParamText(SynthArchetype archetype)
-{
-    return photosynth::toEngineParamText(archetype);
-}
-
-struct ImageAnalysisResult
-{
-    juce::uint64 pixelSeed { 0 };
-    juce::String seedHex;
-    float brightness { 0.5f };   // Luminance 0.0 - 1.0
-    float saturation { 0.5f };   // Saturation 0.0 - 1.0
-    float complexity { 0.5f };   // Sobel Edge Density 0.0 - 1.0
-    float timbreDna  { 0.5f };   // Hue Spectrum Variance 0.0 - 1.0
-    float earthyMutedness { 0.3f };
-    float colorEntropy { 0.5f };
-
-    SynthArchetype archetype { SynthArchetype::AnalogBrass };
-    TemporalEraInfo temporalEra;
-};
-
-class ImageAnalyzer
-{
-public:
-    ImageAnalyzer() = default;
-    ~ImageAnalyzer() = default;
-
-    static ImageAnalysisResult analyzeImage(const juce::Image& image);
-    static juce::uint64 computeFNV1a64(const juce::Image::BitmapData& bitmap);
-
-private:
-    static float computeSobelEdgeDensity(const juce::Image::BitmapData& bitmap);
-    static TemporalEraInfo computeTemporalEra(
-        float brightness, float saturation, float complexity,
-        float earthyMutedness, float colorEntropy,
-        float rRatio, float gRatio, float bRatio,
-        float cRatio, float mRatio, float yRatio
-    );
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ImageAnalyzer)
-};
-`,
-    },
-    {
-      filename: 'SynthEngine.h',
-      language: 'cpp',
-      description: 'Polyphonic sound engine with dual detuned oscillators, sub-oscillator, 24dB ladder filter, and envelopes.',
-      code: `/*
-  ==============================================================================
-    SynthEngine.h
-    Modular Sound Technologies - Photo Synth
-  ==============================================================================
-*/
-
-#pragma once
-
-#include <juce_audio_basics/juce_audio_basics.h>
-#include <juce_dsp/juce_dsp.h>
-#include "ImageAnalyzer.h"
-
-struct VoiceParams
-{
-    float cutoff { 2000.0f };
-    float resonance { 1.0f };
-    float attack { 0.01f };
-    float decay { 0.5f };
-    float sustain { 0.7f };
-    float release { 0.3f };
-    float lfoRate { 2.0f };
-    float lfoDepth { 0.2f };
-    float drive { 0.0f };
-    SynthArchetype archetype { SynthArchetype::AnalogBrass };
-    TemporalEra era { TemporalEra::Era1970s };
-};
-
-class SynthVoice : public juce::SynthesiserVoice
-{
-public:
-    SynthVoice();
-    ~SynthVoice() override = default;
-
-    bool canPlaySound(juce::SynthesiserSound* sound) override;
-    void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound* sound, int currentPitchWheelPosition) override;
-    void stopNote(float velocity, bool allowTailOff) override;
-    void pitchWheelMoved(int newPitchWheelValue) override;
-    void controllerMoved(int controllerNumber, int newControllerValue) override;
-    void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override;
-
-    void prepare(double sampleRate, int samplesPerBlock);
-    void updatePatch(const VoiceParams& params);
-
-private:
-    double currentSampleRate { 44100.0 };
-    float currentPitchHz { 440.0f };
-    float currentVelocity { 0.8f };
-    VoiceParams currentParams;
-
-    juce::dsp::Oscillator<float> osc1, osc2, subOsc;
-    juce::dsp::StateVariableTPTFilter<float> filter;
-    juce::ADSR ampEnv;
-    juce::ADSR filterEnv;
-    float lfoPhase { 0.0f };
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthVoice)
-};
-
-class PhotoSynthSound : public juce::SynthesiserSound
-{
-public:
-    bool appliesToNote(int) override { return true; }
-    bool appliesToChannel(int) override { return true; }
-};
+#endif
 `,
     },
     {
       filename: 'PluginProcessor.h',
       language: 'cpp',
-      description: 'AudioProcessor with APVTS parameter automation, multi-slot morph state, and live oscilloscope FIFO.',
+      description: 'AudioProcessor header: Thread-safe APVTS parameters, lock-free waveform FIFO, user preset serialization, and BPM.',
       code: `/*
   ==============================================================================
     PluginProcessor.h
@@ -476,18 +495,20 @@ public:
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
-#include "ImageAnalyzer.h"
 #include "SynthEngine.h"
+#include "ImageAnalyzer.h"
+#include "EffectsChain.h"
 
-class PhotoSynthAudioProcessor : public juce::AudioProcessor
+class PhotoSynthAudioProcessor  : public juce::AudioProcessor
 {
 public:
     PhotoSynthAudioProcessor();
     ~PhotoSynthAudioProcessor() override;
 
-    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
+    void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
-    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -499,136 +520,47 @@ public:
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
-    void setCurrentProgram(int) override {}
-    const juce::String getProgramName(int) override { return {}; }
-    void changeProgramName(int, const juce::String&) override {}
+    void setCurrentProgram (int) override {}
+    const juce::String getProgramName (int) override { return {}; }
+    void changeProgramName (int, const juce::String&) override {}
 
-    void getStateInformation(juce::MemoryBlock& destData) override;
-    void setStateInformation(const void* data, int sizeInBytes) override;
+    void getStateInformation (juce::MemoryBlock& destData) override;
+    void setStateInformation (const void* data, int sizeInBytes) override;
 
-    void loadSlotAImage(const juce::Image& img);
-    void loadSlotBImage(const juce::Image& img);
-    ImageAnalysisResult getLatestAnalysis() const { return currentAnalysis; }
-
-    juce::AudioProcessorValueTreeState apvts;
-
+    // Real-time oscilloscope FIFO buffer for Editor
     static constexpr int scopeBufferSize = 512;
     void getScopeData(float* destination, int numSamples);
 
+    // Keyboard trigger helper for UI virtual piano
+    void noteOn(int midiNoteNumber, float velocity);
+    void noteOff(int midiNoteNumber);
+    void allNotesOff();
+
+    // Preset save / load helpers
+    void saveCurrentPreset(const juce::String& name, const juce::String& desc = {});
+    juce::StringArray getUserPresetNames() const;
+    void loadUserPreset(const juce::String& name);
+
+    // BPM Support
+    float getBpm() const { return currentBpm; }
+    void setBpm(float newBpm);
+
+    juce::AudioProcessorValueTreeState apvts;
+
 private:
     juce::Synthesiser synth;
-    ImageAnalysisResult analysisSlotA;
-    ImageAnalysisResult analysisSlotB;
-    ImageAnalysisResult currentAnalysis;
-
-    juce::dsp::Limiter<float> masterLimiter;
-    juce::dsp::Chorus<float> masterChorus;
+    juce::MidiBuffer internalMidiBuffer;
+    juce::CriticalSection midiLock;
 
     float scopeBuffer[scopeBufferSize] { 0.0f };
     int scopeBufferWriteIndex { 0 };
     juce::CriticalSection scopeLock;
 
+    float currentBpm { 120.0f };
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
-    void updateMorphState();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhotoSynthAudioProcessor)
-};
-`,
-    },
-    {
-      filename: 'PluginEditor.h',
-      language: 'cpp',
-      description: '1:1 UI split layout: Timbre DNA Gauges, Drag & Drop Center Zone, Oscilloscope, Keyboard & Rotary Knobs.',
-      code: `/*
-  ==============================================================================
-    PluginEditor.h
-    Modular Sound Technologies - Photo Synth
-  ==============================================================================
-*/
-
-#pragma once
-
-#include <juce_gui_extra/juce_gui_extra.h>
-#include <juce_audio_utils/juce_audio_utils.h>
-#include "PluginProcessor.h"
-#include "CustomLookAndFeel.h"
-
-class RadialGaugeComponent : public juce::Component
-{
-public:
-    RadialGaugeComponent(const juce::String& labelText, juce::Colour ringColor);
-    void setValue(float newValue) { targetValue = newValue; repaint(); }
-    void paint(juce::Graphics& g) override;
-
-private:
-    juce::String label;
-    juce::Colour color;
-    float targetValue { 0.5f };
-};
-
-class OscilloscopeComponent : public juce::Component
-{
-public:
-    OscilloscopeComponent() = default;
-    void pushData(const float* samples, int numSamples);
-    void paint(juce::Graphics& g) override;
-
-private:
-    std::vector<float> waveformData { std::vector<float>(256, 0.0f) };
-};
-
-class PhotoSynthAudioEditor  : public juce::AudioProcessorEditor,
-                                public juce::FileDragAndDropTarget,
-                                public juce::Timer
-{
-public:
-    PhotoSynthAudioEditor (PhotoSynthAudioProcessor&);
-    ~PhotoSynthAudioEditor() override;
-
-    void paint (juce::Graphics&) override;
-    void resized() override;
-
-    bool isInterestedInFileDrag (const juce::StringArray& files) override;
-    void filesDropped (const juce::StringArray& files, int x, int y) override;
-    void timerCallback() override;
-
-private:
-    PhotoSynthAudioProcessor& audioProcessor;
-    SynthLookAndFeel customLookAndFeel;
-
-    RadialGaugeComponent colorGauge       { "COLOR",       juce::Colour(0xffec4899) };
-    RadialGaugeComponent brightnessGauge  { "BRIGHTNESS",  juce::Colour(0xfff59e0b) };
-    RadialGaugeComponent saturationGauge  { "SATURATION",  juce::Colour(0xffa855f7) };
-    RadialGaugeComponent complexityGauge  { "COMPLEXITY",  juce::Colour(0xff06b6d4) };
-
-    juce::Image currentLoadedImage;
-    OscilloscopeComponent oscilloscope;
-    juce::MidiKeyboardState keyboardState;
-    juce::MidiKeyboardComponent keyboardComponent;
-
-    juce::Slider cutoffKnob, resKnob, lfoRateKnob, lfoDepthKnob;
-    juce::Slider volKnob, attackKnob, decayKnob, sustainKnob, releaseKnob, driveKnob;
-    juce::ToggleButton limiterButton { "LIMITER" };
-
-    juce::Slider morphSlider;
-    juce::ComboBox presetBox;
-    juce::TextButton saveButton { "SAVE" };
-    juce::TextButton deepDiveButton { "DEEP DIVE" };
-
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutoffAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> resAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> volAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attackAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> decayAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sustainAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driveAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> limiterAttach;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PhotoSynthAudioEditor)
 };
 `,
     },

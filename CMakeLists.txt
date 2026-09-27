@@ -6,15 +6,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Enable automatic FetchContent for JUCE 7 if not provided locally
+# Enable automatic FetchContent for JUCE 8 (WebView & Hybrid Architecture)
 include(FetchContent)
 
 if(NOT TARGET juce::juce_audio_utils)
-    message(STATUS "Fetching JUCE 7.0.12 via FetchContent...")
+    message(STATUS "Fetching JUCE 8.0.4 for EVERSYNTH Hybrid Plugin architecture...")
     FetchContent_Declare(
         juce
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG        7.0.12
+        GIT_TAG        8.0.4
         GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(juce)
@@ -54,9 +54,9 @@ target_sources(PhotoSynth PRIVATE
     plugin/Source/CustomLookAndFeel.h
 )
 
-# Compile Definitions
+# Compile Definitions: JUCE_WEB_BROWSER=1 enables the EVERSYNTH Hybrid WebView engine
 target_compile_definitions(PhotoSynth PRIVATE
-    JUCE_WEB_BROWSER=0
+    JUCE_WEB_BROWSER=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -77,3 +77,22 @@ target_link_libraries(PhotoSynth PRIVATE
     juce::juce_data_structures
     juce::juce_events
 )
+
+# Embed & copy offline Web UI bundle (dist folder) into the plugin resources
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dist")
+    if(APPLE)
+        # On macOS, place under Plugin.vst3/Contents/Resources/ui
+        add_custom_command(TARGET PhotoSynth POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
+            COMMENT "Embedding 1:1 Web UI offline bundle into macOS Plugin Resources"
+        )
+    else()
+        # On Windows / Linux, place adjacent to plugin binary in ui/
+        add_custom_command(TARGET PhotoSynth POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/ui"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/ui"
+            COMMENT "Embedding 1:1 Web UI offline bundle for Windows/Linux VST3"
+        )
+    endif()
+endif()

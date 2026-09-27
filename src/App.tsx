@@ -23,7 +23,8 @@ import { EffectsModal } from './components/EffectsModal';
 import { DeletePresetModal } from './components/DeletePresetModal';
 import { DeepDiveModal } from './components/DeepDiveModal';
 import { ExportVstModal } from './components/ExportVstModal';
-import { Trash2, Keyboard, Activity, Cpu, Download } from 'lucide-react';
+import { pluginBridge } from './audio/PluginBridge';
+import { Trash2, Keyboard, Activity, Cpu, Download, Globe } from 'lucide-react';
 
 const STORAGE_KEY = 'paint_a_synth_user_presets';
 
@@ -94,6 +95,28 @@ export default function App() {
   const [showKeyboard, setShowKeyboard] = useState<boolean>(true);
   const [selectedColorPoints, setSelectedColorPoints] = useState<SelectedColorPoint[]>([]);
   const [presetToDeleteId, setPresetToDeleteId] = useState<string | null>(null);
+
+  // Initialize Hybrid Plugin Bridge (Eversynth Architecture)
+  useEffect(() => {
+    pluginBridge.initNativeBridge();
+
+    const unsubParam = pluginBridge.onParameterChange((paramId, value) => {
+      setPatch((prev) => {
+        if (!prev) return prev;
+        return { ...prev, [paramId]: value };
+      });
+    });
+
+    const unsubBpm = pluginBridge.onBpmChange((newBpm) => {
+      setBpm(newBpm);
+      setBpmInputVal(String(Math.round(newBpm)));
+    });
+
+    return () => {
+      unsubParam();
+      unsubBpm();
+    };
+  }, []);
 
   // Helper to process image source into compact base64 data & metrics
   const processImageSourceToData = useCallback(
@@ -651,6 +674,11 @@ export default function App() {
     const updated = { ...patch, [key]: value };
     setPatch(updated);
     globalAudioEngine.updateParameters(updated);
+    if (typeof value === 'number') {
+      pluginBridge.setParameter(key as string, value);
+    } else if (typeof value === 'boolean') {
+      pluginBridge.setParameter(key as string, value ? 1.0 : 0.0);
+    }
   };
 
   const handleResetToBaseline = () => {
@@ -658,6 +686,7 @@ export default function App() {
     if (baselinePatch) {
       setPatch(baselinePatch);
       globalAudioEngine.updateParameters(baselinePatch);
+      pluginBridge.syncFullPatch(baselinePatch, metrics);
     }
   };
 
@@ -665,6 +694,7 @@ export default function App() {
     await globalAudioEngine.initAudio();
     if (patch) {
       globalAudioEngine.updateParameters(patch);
+      pluginBridge.syncFullPatch(patch, metrics);
     }
     setAudioStarted(true);
   };
@@ -675,6 +705,7 @@ export default function App() {
         handleStartAudio();
       }
       globalAudioEngine.noteOn(note, velocity);
+      pluginBridge.noteOn(note, velocity);
       setActiveNotes((prev) => {
         const next = new Set(prev);
         next.add(note);
@@ -686,6 +717,7 @@ export default function App() {
 
   const handleNoteOff = useCallback((note: number) => {
     globalAudioEngine.noteOff(note);
+    pluginBridge.noteOff(note);
     setActiveNotes((prev) => {
       if (!prev.has(note)) return prev;
       const next = new Set(prev);
@@ -696,6 +728,7 @@ export default function App() {
 
   const handlePanic = useCallback(() => {
     globalAudioEngine.panic();
+    pluginBridge.panic();
     setActiveNotes(new Set());
   }, []);
 
@@ -734,6 +767,20 @@ export default function App() {
               <span className="text-xs sm:text-sm font-black tracking-[0.25em] text-zinc-100 vst-text-embossed uppercase">
                 PAINT A SYNTH
               </span>
+            </div>
+
+            {/* Right side Hybrid Engine badge */}
+            <div className="ml-auto z-10 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsExportModalOpen(true)}
+                title="Eversynth Hybrid Architecture: 100% 1:1 Web Aesthetic with Real-time C++ DSP Engine (Click to view export/specs)"
+                className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-[10px] font-mono text-emerald-400 font-bold transition-all cursor-pointer"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="hidden sm:inline">HYBRID ENGINE:</span>
+                <span>1:1 REPLICATION</span>
+              </button>
             </div>
           </div>
 
@@ -876,7 +923,7 @@ export default function App() {
               presetPhotos={samplePresets}
               onImageSelected={(file) => loadSlotA(file, typeof file === 'string' ? 'Preset A' : file.name)}
               isLoading={isLoading}
-              onGetWaveform={(arr) => globalAudioEngine.getWaveformData(arr)}
+              onGetWaveform={(arr) => pluginBridge.getWaveformData(arr)}
               onGetSpectrum={(arr) => globalAudioEngine.getSpectrumData(arr)}
               onNoteOn={handleNoteOn}
               onNoteOff={handleNoteOff}
@@ -915,7 +962,7 @@ export default function App() {
 
           <div className="flex items-center gap-1.5">
             {isEditingBpm ? (
-              <div className="flex items-center gap-1 bg-[#18181b] border border-cyan-500/60 rounded px-1.5 py-0.5">
+              <div className="flex items-center gap-1 bg-[#18181b] border border-cyan-500/60 rounded px-1.5 py-0.5 shadow-[0_0_10px_rgba(6,182,212,0.25)]">
                 <input
                   type="number"
                   min={20}
@@ -929,6 +976,7 @@ export default function App() {
                         const clamped = Math.max(20, Math.min(300, num));
                         setBpm(clamped);
                         setBpmInputVal(String(clamped));
+                        pluginBridge.setBpm(clamped);
                       }
                       setIsEditingBpm(false);
                     } else if (e.key === 'Escape') {
@@ -942,23 +990,24 @@ export default function App() {
                       const clamped = Math.max(20, Math.min(300, num));
                       setBpm(clamped);
                       setBpmInputVal(String(clamped));
+                      pluginBridge.setBpm(clamped);
                     }
                     setIsEditingBpm(false);
                   }}
                   autoFocus
-                  className="w-12 bg-transparent text-cyan-300 font-bold text-center text-[11px] focus:outline-none"
+                  className="w-14 bg-transparent text-cyan-300 font-bold text-center text-[11px] focus:outline-none"
                 />
                 <span className="text-[10px] text-cyan-400 font-bold">BPM</span>
               </div>
             ) : (
               <button
                 type="button"
-                onDoubleClick={() => {
+                onClick={() => {
                   setBpmInputVal(String(bpm));
                   setIsEditingBpm(true);
                 }}
-                title="Double-click to edit BPM (20 - 300)"
-                className="hover:text-cyan-400 hover:bg-cyan-500/10 px-2 py-0.5 rounded border border-transparent hover:border-cyan-500/30 transition-all font-bold cursor-pointer flex items-center gap-1"
+                title="Click to type custom BPM (20 - 300)"
+                className="hover:text-cyan-400 hover:bg-cyan-500/10 px-2 py-0.5 rounded border border-zinc-700/60 hover:border-cyan-500/40 transition-all font-bold cursor-pointer flex items-center gap-1 text-[11px] text-cyan-300 font-mono"
               >
                 <span>{bpm} BPM</span>
               </button>

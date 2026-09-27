@@ -1,4 +1,4 @@
-name: Build VST3 & AU Plugins
+name: Build VST3 & AU Plugins (Eversynth Hybrid Architecture)
 
 on:
   push:
@@ -20,19 +20,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS (Universal VST3 & AU)
+          - name: macOS (Universal VST3 & AU Hybrid)
             os: macos-14
             artifact_name: PhotoSynth-macOS-Universal
             build_type: Release
-            cmake_args: "-DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13"
+            cmake_args: "-DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15"
 
-          - name: Windows (64-bit VST3 & Standalone)
+          - name: Windows (64-bit VST3 & Standalone Hybrid)
             os: windows-latest
             artifact_name: PhotoSynth-Windows-x64
             build_type: Release
             cmake_args: "-A x64"
 
-          - name: Linux (Ubuntu VST3 & Standalone)
+          - name: Linux (Ubuntu VST3 & Standalone Hybrid)
             os: ubuntu-22.04
             artifact_name: PhotoSynth-Linux-x64
             build_type: Release
@@ -43,6 +43,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Set up Node.js (Web UI Engine)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build 100% 1:1 Offline Web UI Bundle
+        run: |
+          npm ci || npm install
+          npm run build
 
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'
@@ -64,6 +74,7 @@ jobs:
             libgl1-mesa-dev \
             libglu1-mesa-dev \
             libcurl4-openssl-dev \
+            libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev || true \
             ninja-build
 
       - name: Install macOS Tools
@@ -75,7 +86,7 @@ jobs:
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ${{ matrix.cmake_args }}
 
-      - name: Build Plugins
+      - name: Build Hybrid Plugins
         run: |
           cmake --build build --config ${{ matrix.build_type }} --parallel
 
@@ -86,6 +97,14 @@ jobs:
           find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \;
           find build -name "*.component" -maxdepth 5 -exec cp -R {} artifacts/AU/ \;
           find build -name "*.app" -maxdepth 5 -exec cp -R {} artifacts/Standalone/ \; || true
+          
+          # Ensure offline Web UI bundle is present in bundle resources
+          for p in artifacts/VST3/*.vst3 artifacts/AU/*.component artifacts/Standalone/*.app; do
+            if [ -d "$p" ]; then
+              mkdir -p "$p/Contents/Resources/ui"
+              cp -R dist/* "$p/Contents/Resources/ui/"
+            fi
+          done
           cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip .
 
       - name: Prepare Windows Artifacts
@@ -95,6 +114,11 @@ jobs:
           mkdir -p artifacts/VST3 artifacts/Standalone
           find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \;
           find build -name "*.exe" -not -path "*/CMakeFiles/*" -exec cp -R {} artifacts/Standalone/ \; || true
+          
+          # Bundle offline web assets alongside the binaries
+          mkdir -p artifacts/VST3/ui artifacts/Standalone/ui
+          cp -R dist/* artifacts/VST3/ui/ || true
+          cp -R dist/* artifacts/Standalone/ui/ || true
           cd artifacts && 7z a -tzip ../${{ matrix.artifact_name }}.zip .
 
       - name: Prepare Linux Artifacts
@@ -103,6 +127,10 @@ jobs:
           mkdir -p artifacts/VST3 artifacts/Standalone
           find build -name "*.vst3" -maxdepth 5 -exec cp -R {} artifacts/VST3/ \;
           find build -maxdepth 5 -type f -executable -not -path "*/CMakeFiles/*" -name "*Photo*Synth*" -exec cp {} artifacts/Standalone/ \; || true
+          
+          mkdir -p artifacts/VST3/ui artifacts/Standalone/ui
+          cp -R dist/* artifacts/VST3/ui/ || true
+          cp -R dist/* artifacts/Standalone/ui/ || true
           cd artifacts && zip -r ../${{ matrix.artifact_name }}.zip .
 
       - name: Upload Build Artifacts
@@ -129,7 +157,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: all-artifacts/**/*.zip
-          name: Photo Synth ${{ github.ref_name }}
+          name: Photo Synth Hybrid ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true

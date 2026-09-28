@@ -23,8 +23,10 @@ import { EffectsModal } from './components/EffectsModal';
 import { DeletePresetModal } from './components/DeletePresetModal';
 import { DeepDiveModal } from './components/DeepDiveModal';
 import { ExportVstModal } from './components/ExportVstModal';
+import { LicenseModal } from './components/LicenseModal';
+import { getStoredLicense, LicenseData } from './services/licenseService';
 import { pluginBridge } from './audio/PluginBridge';
-import { Trash2, Keyboard, Activity, Cpu, Download, Globe } from 'lucide-react';
+import { Trash2, Keyboard, Activity, Cpu, Download, Globe, KeyRound } from 'lucide-react';
 
 const STORAGE_KEY = 'paint_a_synth_user_presets';
 
@@ -91,6 +93,12 @@ export default function App() {
   const [isEffectsModalOpen, setIsEffectsModalOpen] = useState<boolean>(false);
   const [isDeepDiveOpen, setIsDeepDiveOpen] = useState<boolean>(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [currentLicense, setCurrentLicense] = useState<LicenseData | null>(() => getStoredLicense());
+  const isLicensed = currentLicense?.status === 'active';
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(() => {
+    const lic = getStoredLicense();
+    return !lic || lic.status !== 'active';
+  });
   const [selectedPresetId, setSelectedPresetId] = useState<string>('');
   const [showKeyboard, setShowKeyboard] = useState<boolean>(true);
   const [selectedColorPoints, setSelectedColorPoints] = useState<SelectedColorPoint[]>([]);
@@ -717,6 +725,10 @@ export default function App() {
   };
 
   const handleStartAudio = async () => {
+    if (!isLicensed) {
+      setIsLicenseModalOpen(true);
+      return;
+    }
     await globalAudioEngine.initAudio();
     if (patch) {
       globalAudioEngine.updateParameters(patch);
@@ -727,6 +739,10 @@ export default function App() {
 
   const handleNoteOn = useCallback(
     (note: number, velocity = 0.8) => {
+      if (!isLicensed) {
+        setIsLicenseModalOpen(true);
+        return;
+      }
       if (!audioStarted) {
         handleStartAudio();
       }
@@ -737,7 +753,7 @@ export default function App() {
         return next;
       });
     },
-    [audioStarted]
+    [audioStarted, isLicensed]
   );
 
   const handleNoteOff = useCallback((note: number) => {
@@ -749,6 +765,18 @@ export default function App() {
       return next;
     });
   }, []);
+
+  const handleLicenseChanged = (license: LicenseData | null) => {
+    setCurrentLicense(license);
+    if (license?.status === 'active') {
+      setIsLicenseModalOpen(false);
+    } else {
+      setIsLicenseModalOpen(true);
+      globalAudioEngine.panic();
+      pluginBridge.panic();
+      setActiveNotes(new Set());
+    }
+  };
 
   const handlePanic = useCallback(() => {
     globalAudioEngine.panic();
@@ -762,35 +790,56 @@ export default function App() {
       <div className="w-full max-w-[1280px] h-full max-h-[960px] vst-chassis border border-[#27272a] rounded-none shadow-2xl flex flex-col overflow-hidden relative">
         {/* Header Section Container with Left Logo */}
         <div className="relative shrink-0 flex flex-col">
-          {/* Left Square Logo Block displaying Modular Sound Technologies logo - Click to Export VST/AU */}
+          {/* Left Square Logo Block displaying Modular Sound Technologies logo */}
           <button
             type="button"
             onClick={() => setIsExportModalOpen(true)}
-            title="Modular Sound Technologies - Click to Export VST3 & AU Plugin"
-            className="absolute left-0 top-0 bottom-0 z-30 w-16 sm:w-20 bg-[#141417] border-r-2 border-b-2 border-[#27272a] hover:border-amber-500/60 flex flex-col items-center justify-center p-1.5 shadow-[0_0_12px_rgba(0,0,0,0.8)] overflow-hidden cursor-pointer group transition-all"
+            title="Modular Sound Technologies — About & Specs"
+            className="absolute left-0 top-0 bottom-0 z-30 w-16 sm:w-20 bg-[#141417] border-r-2 border-b-2 border-[#27272a] hover:border-cyan-500/60 flex flex-col items-center justify-center p-1.5 shadow-[0_0_12px_rgba(0,0,0,0.8)] overflow-hidden cursor-pointer group transition-all"
           >
-            {/* Subtle white-grey background hue overlay to make the logo pop */}
+            {/* High-contrast silver brushed plate ensuring the black logo emblem & text are razor sharp */}
             <div 
-              className="w-full h-full rounded-md flex items-center justify-center p-1 border border-zinc-200/15 group-hover:border-amber-400/50 shadow-[0_0_15px_rgba(255,255,255,0.12)] group-hover:shadow-[0_0_15px_rgba(245,158,11,0.25)] transition-all"
-              style={{
-                background: 'radial-gradient(circle at center, rgba(255, 255, 255, 0.18) 0%, rgba(212, 212, 216, 0.08) 55%, rgba(20, 20, 23, 0.95) 100%)'
-              }}
+              className="w-full h-full rounded-md flex items-center justify-center p-1.5 bg-gradient-to-b from-white via-zinc-100 to-zinc-300 border border-zinc-200 shadow-[inset_0_1px_2px_rgba(255,255,255,1),0_2px_8px_rgba(0,0,0,0.6)] group-hover:brightness-105 transition-all"
             >
               <img
                 src="/MODULARSOUNDTECHNOLOGIES.png"
                 alt="Modular Sound Technologies"
-                className="max-w-full max-h-full object-contain filter drop-shadow-[0_0_8px_rgba(255,255,255,0.35)] group-hover:scale-105 transition-all"
+                className="max-w-full max-h-full object-contain filter drop-shadow-[0_1px_1px_rgba(0,0,0,0.25)] group-hover:scale-105 transition-all"
               />
             </div>
           </button>
 
           {/* Top Window Titlebar */}
-          <div className="relative bg-gradient-to-r from-[#141417] via-[#1f1f23] to-[#141417] border-b border-[#27272a] pl-20 sm:pl-24 pr-4 py-2 flex items-center justify-between shadow-md min-h-[36px]">
+          <div className="relative bg-gradient-to-r from-[#141417] via-[#1f1f23] to-[#141417] border-b border-[#27272a] pl-20 sm:pl-24 pr-3 py-1.5 flex items-center justify-between shadow-md min-h-[36px]">
             {/* Center Brand Name */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <span className="text-xs sm:text-sm font-black tracking-[0.25em] text-zinc-100 vst-text-embossed uppercase">
                 PAINT A SYNTH
               </span>
+            </div>
+
+            {/* Right: Gumroad License Details Button */}
+            <div className="ml-auto z-20 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsLicenseModalOpen(true)}
+                className={`vst-btn-3d flex items-center gap-1.5 px-2.5 py-1 rounded text-[10px] font-bold tracking-wider uppercase transition-all cursor-pointer ${
+                  currentLicense?.status === 'active'
+                    ? 'border-emerald-500/50 text-emerald-300 hover:border-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.25)]'
+                    : 'border-zinc-700 hover:border-cyan-500/60 text-zinc-300 hover:text-cyan-300'
+                }`}
+                title="View & Manage Gumroad License Key"
+              >
+                <KeyRound className="w-3 h-3 text-cyan-400" />
+                <span className="hidden sm:inline">LICENSE</span>
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    currentLicense?.status === 'active'
+                      ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                      : 'bg-zinc-600'
+                  }`}
+                />
+              </button>
             </div>
           </div>
 
@@ -1077,6 +1126,14 @@ export default function App() {
       <ExportVstModal
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}
+      />
+
+      {/* Gumroad License Details Modal */}
+      <LicenseModal
+        isOpen={isLicenseModalOpen}
+        onClose={() => setIsLicenseModalOpen(false)}
+        currentLicense={currentLicense}
+        onLicenseChanged={handleLicenseChanged}
       />
     </div>
   );

@@ -51,7 +51,7 @@ jobs:
 
       - name: Build 100% 1:1 Offline Web UI Bundle
         run: |
-          npm ci || npm install
+          npm install
           npm run build
 
       - name: Install Linux Dependencies
@@ -74,8 +74,8 @@ jobs:
             libgl1-mesa-dev \
             libglu1-mesa-dev \
             libcurl4-openssl-dev \
-            libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev || true \
             ninja-build
+          sudo apt-get install -y libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev || true
 
       - name: Install macOS Tools
         if: runner.os == 'macOS'

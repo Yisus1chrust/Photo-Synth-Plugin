@@ -71,6 +71,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       onImageSelected(e.target.files[0]);
+      e.target.value = '';
     }
   };
 

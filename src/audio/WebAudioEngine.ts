@@ -686,14 +686,15 @@ export class WebAudioEngine {
     const unisonScale = 1.0 / Math.sqrt(Math.max(1, params.unisonVoices || 1));
     const peakAmp = Math.min(0.45, Math.max(0.10, velocity * 0.35 * unisonScale * polyphonicScale * engineGainBoost));
 
-    // ADSR Envelope: 2ms micro-attack floor gives instant transient response
-    const microAttackFloor = 0.002;
-    const safeAttack = Math.max(microAttackFloor, Math.min(5.0, params.attackTime || 0.005));
+    // ADSR Envelope: 5ms smooth attack floor prevents DC clicks and kick-like transients
+    const microAttackFloor = 0.005;
+    const safeAttack = Math.max(microAttackFloor, Math.min(5.0, params.attackTime || 0.01));
     const safeDecay = Math.max(0.01, Math.min(10.0, params.decayTime || 0.8));
     const safeSustain = Math.max(0.35, Math.min(1.0, params.sustainLevel ?? 0.7));
 
     const attackEnd = now + safeAttack;
-    ampGain.gain.linearRampToValueAtTime(peakAmp, attackEnd);
+    ampGain.gain.setValueAtTime(0.0001, now);
+    ampGain.gain.exponentialRampToValueAtTime(peakAmp, attackEnd);
     ampGain.gain.setTargetAtTime(
       peakAmp * safeSustain,
       attackEnd,
@@ -707,47 +708,6 @@ export class WebAudioEngine {
     const safeRes = Math.max(0.1, Math.min(10.0, params.resonance || 1.0));
     filter.frequency.setValueAtTime(safeCutoff, now);
     filter.Q.setValueAtTime(safeRes, now);
-
-    // Filter Envelope Sweep with healthy cutoff floor so fundamental frequencies are never muffled out
-    filter.frequency.cancelScheduledValues(now);
-    const startCutoff = Math.max(350, safeCutoff * 0.6);
-    const targetCutoff = Math.min(20000, Math.max(1200, safeCutoff * 2.0));
-    filter.frequency.setValueAtTime(startCutoff, now);
-    filter.frequency.exponentialRampToValueAtTime(
-      targetCutoff,
-      now + safeAttack * 1.5
-    );
-
-    // Dynamic Physical Transient Exciter (Hammer / Pluck / Strike / Bow)
-    if (tp) {
-      const exciter = this.ctx.createOscillator();
-      const exciterGain = this.ctx.createGain();
-      const exciterFilter = this.ctx.createBiquadFilter();
-
-      if (tp.type === 'hammer' || tp.type === 'strike' || tp.type === 'pluck') {
-        exciter.type = tp.type === 'strike' ? 'square' : 'triangle';
-        const mult = tp.type === 'strike' ? 5.5 : tp.type === 'hammer' ? 3.2 : 2.5;
-        exciter.frequency.setValueAtTime(freq * mult, now);
-
-        exciterFilter.type = tp.type === 'pluck' ? 'highpass' : 'bandpass';
-        exciterFilter.frequency.setValueAtTime(freq * (1.8 + tp.hardness * 2.5), now);
-
-        const peakGain = velocity * (0.15 + tp.hardness * 0.30) * unisonScale;
-        const dur = tp.type === 'strike' ? 0.015 : tp.type === 'hammer' ? 0.035 : 0.025;
-
-        const exciterRamp = 0.003; // 3ms micro fade-in
-        exciterGain.gain.setValueAtTime(0, now);
-        exciterGain.gain.linearRampToValueAtTime(peakGain, now + exciterRamp);
-        exciterGain.gain.exponentialRampToValueAtTime(0.0001, now + exciterRamp + dur);
-
-        exciter.connect(exciterFilter);
-        exciterFilter.connect(exciterGain);
-        exciterGain.connect(filter);
-
-        exciter.start(now);
-        exciter.stop(now + dur + exciterRamp + 0.01);
-      }
-    }
 
     // Connect LFO to Filter
     if (this.globalLfoGain) {
@@ -784,19 +744,6 @@ export class WebAudioEngine {
       subOsc.connect(subGain);
       subGain.connect(filter);
       subOsc.start(now);
-
-      hammerClick = this.ctx.createOscillator();
-      hammerClick.type = 'sine';
-      hammerClick.frequency.setValueAtTime(freq * 3.8, now);
-      hammerGain = this.ctx.createGain();
-      const hammerRamp = 0.003;
-      hammerGain.gain.setValueAtTime(0, now);
-      hammerGain.gain.linearRampToValueAtTime(velocity * 0.8, now + hammerRamp);
-      hammerGain.gain.exponentialRampToValueAtTime(0.0001, now + hammerRamp + 0.025);
-      hammerClick.connect(hammerGain);
-      hammerGain.connect(filter);
-      hammerClick.start(now);
-      hammerClick.stop(now + hammerRamp + 0.03);
 
       osc1.connect(filter);
       osc2.connect(filter);
@@ -960,6 +907,8 @@ export class WebAudioEngine {
   public getWaveformData(array: Uint8Array): void {
     if (this.analyser) {
       this.analyser.getByteTimeDomainData(array as unknown as Uint8Array<ArrayBuffer>);
+    } else {
+      array.fill(128);
     }
   }
 

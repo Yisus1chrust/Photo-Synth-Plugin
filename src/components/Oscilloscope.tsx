@@ -37,25 +37,42 @@ export const Oscilloscope: React.FC<OscilloscopeProps> = ({
 
       onGetWaveform(waveformArray);
 
+      // Check if there is active audio signal
+      let hasSignal = false;
+      for (let i = 0; i < waveformArray.length; i++) {
+        if (waveformArray[i] !== 0 && Math.abs(waveformArray[i] - 128) > 3) {
+          hasSignal = true;
+          break;
+        }
+      }
+
       ctx.lineWidth = 2;
-      ctx.strokeStyle = '#38bdf8';
-      ctx.shadowColor = '#00f2fe';
-      ctx.shadowBlur = 6;
+      ctx.strokeStyle = hasSignal ? '#38bdf8' : '#0284c7';
+      ctx.shadowColor = hasSignal ? '#00f2fe' : '#0284c7';
+      ctx.shadowBlur = hasSignal ? 8 : 2;
 
       ctx.beginPath();
       const sliceWidth = w / waveformArray.length;
       let x = 0;
+      const nowMs = performance.now();
 
       for (let i = 0; i < waveformArray.length; i++) {
-        const v = waveformArray[i] / 128.0;
-        const y = (v * h) / 2;
+        let y: number;
+        if (hasSignal) {
+          // Actual real-time audio waveform from engine
+          const v = (waveformArray[i] - 128) / 128.0;
+          y = (h / 2) - (v * h * 0.46);
+        } else {
+          // Living ambient baseline indicating active engine connection
+          const wave = Math.sin((i * 0.04) + (nowMs * 0.003)) * 1.5;
+          y = (h / 2) + wave;
+        }
 
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
 
         x += sliceWidth;
       }
-      ctx.lineTo(w, h / 2);
       ctx.stroke();
       ctx.shadowBlur = 0;
 

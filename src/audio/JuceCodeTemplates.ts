@@ -64,7 +64,7 @@ jobs:
 
       - name: Build 100% 1:1 Offline Web UI Bundle
         run: |
-          npm ci || npm install
+          npm install
           npm run build
 
       - name: Install Linux Dependencies
@@ -76,8 +76,8 @@ jobs:
             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \\
             libxinerama-dev libxrandr-dev libxrender-dev mesa-common-dev \\
             libgl1-mesa-dev libglu1-mesa-dev libcurl4-openssl-dev \\
-            libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev || true \\
             ninja-build
+          sudo apt-get install -y libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev || true
 
       - name: Install macOS Tools
         if: runner.os == 'macOS'
@@ -224,23 +224,6 @@ target_link_libraries(PhotoSynth PRIVATE
     juce::juce_data_structures
     juce::juce_events
 )
-
-# Embed & copy offline Web UI bundle into the plugin resources
-if(EXISTS "\${CMAKE_CURRENT_SOURCE_DIR}/dist")
-    if(APPLE)
-        add_custom_command(TARGET PhotoSynth POST_BUILD
-            COMMAND \${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
-            COMMAND \${CMAKE_COMMAND} -E copy_directory "\${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
-            COMMENT "Embedding 1:1 Web UI offline bundle into macOS Plugin Resources"
-        )
-    else()
-        add_custom_command(TARGET PhotoSynth POST_BUILD
-            COMMAND \${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/ui"
-            COMMAND \${CMAKE_COMMAND} -E copy_directory "\${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/ui"
-            COMMENT "Embedding 1:1 Web UI offline bundle for Windows/Linux VST3"
-        )
-    endif()
-endif()
 `,
     },
     {
@@ -328,7 +311,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         .withNativeFunction("setParameter", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 2) {
                 juce::String paramId = args[0].toString();
-                float value = (float)args[1];
+                float value = (float)(double)args[1];
                 if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
                     param->setValueNotifyingHost(param->convertTo0to1(value));
                 }
@@ -337,22 +320,22 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         })
         .withNativeFunction("noteOn", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)args[0];
-                float vel = args.size() > 1 ? (float)args[1] : 0.85f;
+                int note = (int)(int64_t)args[0];
+                float vel = args.size() > 1 ? (float)(double)args[1] : 0.85f;
                 audioProcessor.noteOn(note, vel);
             }
             completion(juce::var());
         })
         .withNativeFunction("noteOff", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)args[0];
+                int note = (int)(int64_t)args[0];
                 audioProcessor.noteOff(note);
             }
             completion(juce::var());
         })
         .withNativeFunction("setBpm", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                float bpm = (float)args[0];
+                float bpm = (float)(double)args[0];
                 audioProcessor.setBpm(bpm);
             }
             completion(juce::var());
@@ -376,7 +359,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
             float scopeBuffer[256];
             audioProcessor.getScopeData(scopeBuffer, 256);
             juce::Array<juce::var> arr;
-            for (int i = 0; i < 256; ++i) arr.add(scopeBuffer[i]);
+            for (int i = 0; i < 256; ++i) arr.add((double)scopeBuffer[i]);
             completion(arr);
         });
 

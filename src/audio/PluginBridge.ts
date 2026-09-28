@@ -49,6 +49,7 @@ declare global {
 
 class HybridPluginBridge {
   private isConnectedToNative = false;
+  private hasNativeWaveformStream = false;
   private nativeFunctions: Map<string, (...args: any[]) => Promise<any>> = new Map();
   private waveformListeners: Set<(data: Float32Array) => void> = new Set();
   private parameterListeners: Set<(paramId: string, value: number) => void> = new Set();
@@ -149,6 +150,7 @@ class HybridPluginBridge {
         if (!samples || !samples.length) return;
         const f32 = new Float32Array(samples);
         this.lastWaveform = f32;
+        this.hasNativeWaveformStream = true;
         this.waveformListeners.forEach((fn) => fn(f32));
       },
       onParameterUpdate: (paramId: string, value: number) => {
@@ -333,7 +335,7 @@ class HybridPluginBridge {
    * Get latest waveform data (either from native engine buffer or web audio analyser).
    */
   public getWaveformData(destinationArray: Uint8Array): void {
-    if (this.isConnectedToNative && this.lastWaveform.length > 0) {
+    if (this.hasNativeWaveformStream && this.lastWaveform.length > 0) {
       // Map float [-1.0, 1.0] to uint8 [0, 255]
       const len = Math.min(destinationArray.length, this.lastWaveform.length);
       for (let i = 0; i < len; i++) {

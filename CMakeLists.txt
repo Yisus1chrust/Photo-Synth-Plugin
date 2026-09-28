@@ -77,22 +77,3 @@ target_link_libraries(PhotoSynth PRIVATE
     juce::juce_data_structures
     juce::juce_events
 )
-
-# Embed & copy offline Web UI bundle (dist folder) into the plugin resources
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dist")
-    if(APPLE)
-        # On macOS, place under Plugin.vst3/Contents/Resources/ui
-        add_custom_command(TARGET PhotoSynth POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/../Resources/ui"
-            COMMENT "Embedding 1:1 Web UI offline bundle into macOS Plugin Resources"
-        )
-    else()
-        # On Windows / Linux, place adjacent to plugin binary in ui/
-        add_custom_command(TARGET PhotoSynth POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhotoSynth>/ui"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist" "$<TARGET_FILE_DIR:PhotoSynth>/ui"
-            COMMENT "Embedding 1:1 Web UI offline bundle for Windows/Linux VST3"
-        )
-    endif()
-endif()

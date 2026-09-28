@@ -9,6 +9,8 @@
 
 #include "PluginEditor.h"
 #include "LogoBinaryData.h"
+#include <cstddef>
+#include <cstring>
 
 #if JUCE_WEB_BROWSER
 
@@ -34,7 +36,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         .withNativeFunction("setParameter", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 2) {
                 juce::String paramId = args[0].toString();
-                float value = (float)args[1];
+                float value = (float)(double)args[1];
 
                 if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
                     param->setValueNotifyingHost(param->convertTo0to1(value));
@@ -45,8 +47,8 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         // 2. noteOn native function
         .withNativeFunction("noteOn", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)args[0];
-                float vel = args.size() > 1 ? (float)args[1] : 0.85f;
+                int note = (int)(int64_t)args[0];
+                float vel = args.size() > 1 ? (float)(double)args[1] : 0.85f;
                 audioProcessor.noteOn(note, vel);
             }
             completion(juce::var());
@@ -54,7 +56,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         // 3. noteOff native function
         .withNativeFunction("noteOff", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)args[0];
+                int note = (int)(int64_t)args[0];
                 audioProcessor.noteOff(note);
             }
             completion(juce::var());
@@ -62,7 +64,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         // 4. setBpm native function
         .withNativeFunction("setBpm", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                float bpm = (float)args[0];
+                float bpm = (float)(double)args[0];
                 audioProcessor.setBpm(bpm);
             }
             completion(juce::var());
@@ -90,7 +92,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
             audioProcessor.getScopeData(scopeBuffer, 256);
             juce::Array<juce::var> arr;
             for (int i = 0; i < 256; ++i) {
-                arr.add(scopeBuffer[i]);
+                arr.add((double)scopeBuffer[i]);
             }
             completion(arr);
         })

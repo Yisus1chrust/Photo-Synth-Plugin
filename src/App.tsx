@@ -121,22 +121,39 @@ export default function App() {
   // Helper to process image source into compact base64 data & metrics
   const processImageSourceToData = useCallback(
     async (source: File | string, presetTitle?: string) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
+      let previewUrl = '';
+      let loadedImg: HTMLImageElement;
 
-      const loadPromise = new Promise<HTMLImageElement>((resolve, reject) => {
-        img.onload = () => resolve(img);
-        img.onerror = (err) => reject(err);
-        if (typeof source === 'string') {
+      if (source instanceof File) {
+        // Read directly as Base64 Data URL to avoid any CORS/blob restrictions across browsers
+        const base64Str = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = (e) => reject(e);
+          reader.readAsDataURL(source);
+        });
+
+        previewUrl = base64Str;
+        loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = (e) => reject(e);
+          img.src = base64Str;
+        });
+      } else {
+        loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          if (typeof source === 'string' && source.startsWith('http')) {
+            img.crossOrigin = 'anonymous';
+          }
+          img.onload = () => resolve(img);
+          img.onerror = (e) => reject(e);
           img.src = source;
-        } else {
-          img.src = URL.createObjectURL(source);
-        }
-      });
+        });
+        previewUrl = source;
+      }
 
-      const loadedImg = await loadPromise;
-
-      let previewUrl: string;
+      // Resize down to max 600px for lightning-fast analysis and compact storage
       try {
         const canvas = document.createElement('canvas');
         const maxDim = 600;
@@ -157,11 +174,9 @@ export default function App() {
         if (ctx) {
           ctx.drawImage(loadedImg, 0, 0, canvas.width, canvas.height);
           previewUrl = canvas.toDataURL('image/jpeg', 0.85);
-        } else {
-          previewUrl = typeof source === 'string' ? source : URL.createObjectURL(source);
         }
       } catch {
-        previewUrl = typeof source === 'string' ? source : URL.createObjectURL(source);
+        // Keep original previewUrl if canvas export is restricted
       }
 
       const { metrics: extractedMetrics, baselinePatch: generatedPatch } =
@@ -767,20 +782,6 @@ export default function App() {
               <span className="text-xs sm:text-sm font-black tracking-[0.25em] text-zinc-100 vst-text-embossed uppercase">
                 PAINT A SYNTH
               </span>
-            </div>
-
-            {/* Right side Hybrid Engine badge */}
-            <div className="ml-auto z-10 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsExportModalOpen(true)}
-                title="Eversynth Hybrid Architecture: 100% 1:1 Web Aesthetic with Real-time C++ DSP Engine (Click to view export/specs)"
-                className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-[10px] font-mono text-emerald-400 font-bold transition-all cursor-pointer"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="hidden sm:inline">HYBRID ENGINE:</span>
-                <span>1:1 REPLICATION</span>
-              </button>
             </div>
           </div>
 

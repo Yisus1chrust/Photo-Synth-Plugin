@@ -71,9 +71,11 @@ export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
   // QWERTY keyboard listener
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.repeat || e.target instanceof HTMLInputElement) return;
+      if (e.repeat || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const key = e.key.toLowerCase();
       if (key in QWERTY_MAP) {
+        e.preventDefault();
+        e.stopPropagation();
         const midiNote = 48 + octaveShift * 12 + QWERTY_MAP[key]; // C3 start for typing
         handleKeyNoteOn(midiNote, 0.85);
       }
@@ -83,9 +85,11 @@ export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
 
   const handleKeyUp = useCallback(
     (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const key = e.key.toLowerCase();
       if (key in QWERTY_MAP) {
+        e.preventDefault();
+        e.stopPropagation();
         const midiNote = 48 + octaveShift * 12 + QWERTY_MAP[key];
         handleKeyNoteOff(midiNote);
       }

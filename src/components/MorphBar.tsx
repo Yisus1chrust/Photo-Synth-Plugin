@@ -65,7 +65,10 @@ export const MorphBar: React.FC<MorphBarProps> = ({
           type="file"
           ref={fileInputA}
           onChange={(e) => {
-            if (e.target.files && e.target.files[0]) onUploadSlotA(e.target.files[0]);
+            if (e.target.files && e.target.files[0]) {
+              onUploadSlotA(e.target.files[0]);
+              e.target.value = '';
+            }
           }}
           accept="image/*"
           className="hidden"
@@ -73,10 +76,13 @@ export const MorphBar: React.FC<MorphBarProps> = ({
         <select
           value={slotA?.id || ''}
           onChange={(e) => {
-            if (e.target.value === '__upload__') {
+            const val = e.target.value;
+            if (val === '__upload__') {
               fileInputA.current?.click();
+              // Reset select so it never stays stuck on __upload__
+              e.target.value = slotA?.id || '';
             } else {
-              onSelectSlotA(e.target.value);
+              onSelectSlotA(val);
             }
           }}
           className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
@@ -160,7 +166,10 @@ export const MorphBar: React.FC<MorphBarProps> = ({
           type="file"
           ref={fileInputB}
           onChange={(e) => {
-            if (e.target.files && e.target.files[0]) onUploadSlotB(e.target.files[0]);
+            if (e.target.files && e.target.files[0]) {
+              onUploadSlotB(e.target.files[0]);
+              e.target.value = '';
+            }
           }}
           accept="image/*"
           className="hidden"
@@ -168,10 +177,13 @@ export const MorphBar: React.FC<MorphBarProps> = ({
         <select
           value={slotB?.id || ''}
           onChange={(e) => {
-            if (e.target.value === '__upload__') {
+            const val = e.target.value;
+            if (val === '__upload__') {
               fileInputB.current?.click();
+              // Reset select so it never stays stuck on __upload__
+              e.target.value = slotB?.id || '';
             } else {
-              onSelectSlotB(e.target.value);
+              onSelectSlotB(val);
             }
           }}
           className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"

@@ -6,6 +6,27 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Windows WebView2 package resolution for JUCE 8
+if(WIN32)
+    set(PHOTO_SYNTH_NEEDS_WEBVIEW2 TRUE)
+    if(DEFINED ENV{JUCE_WEBVIEW2_PACKAGE_LOCATION} AND NOT DEFINED JUCE_WEBVIEW2_PACKAGE_LOCATION)
+        set(JUCE_WEBVIEW2_PACKAGE_LOCATION "$ENV{JUCE_WEBVIEW2_PACKAGE_LOCATION}" CACHE PATH "Path to WebView2 package" FORCE)
+    endif()
+    if(NOT DEFINED JUCE_WEBVIEW2_PACKAGE_LOCATION)
+        find_program(NUGET_EXE nuget)
+        if(NUGET_EXE)
+            message(STATUS "Downloading Microsoft.Web.WebView2 package using nuget...")
+            execute_process(
+                COMMAND ${NUGET_EXE} install Microsoft.Web.WebView2 -OutputDirectory ${CMAKE_BINARY_DIR}/packages
+                OUTPUT_QUIET
+            )
+            set(JUCE_WEBVIEW2_PACKAGE_LOCATION "${CMAKE_BINARY_DIR}/packages" CACHE PATH "Path to WebView2 package" FORCE)
+        endif()
+    endif()
+else()
+    set(PHOTO_SYNTH_NEEDS_WEBVIEW2 FALSE)
+endif()
+
 # Enable automatic FetchContent for JUCE 8 (WebView & Hybrid Architecture)
 include(FetchContent)
 
@@ -34,7 +55,7 @@ juce_add_plugin(PhotoSynth
     FORMATS VST3 AU Standalone
     PRODUCT_NAME "Photo Synth"
     BUNDLE_ID "com.modularsoundtechnologies.photosynth"
-    NEEDS_WEBVIEW2 TRUE
+    NEEDS_WEBVIEW2 ${PHOTO_SYNTH_NEEDS_WEBVIEW2}
 )
 
 # Source files

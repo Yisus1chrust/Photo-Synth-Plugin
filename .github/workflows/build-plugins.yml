@@ -103,6 +103,15 @@ jobs:
         run: |
           brew install ninja || true
 
+      - name: Install Windows WebView2 Package
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p packages
+          nuget install Microsoft.Web.WebView2 -Version 1.0.2903.40 -OutputDirectory packages
+          echo "JUCE_WEBVIEW2_PACKAGE_LOCATION=$GITHUB_WORKSPACE/packages" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/packages/Microsoft.Web.WebView2.1.0.2903.40/build/native;$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
+
       - name: Configure CMake
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ${{ matrix.cmake_args }}

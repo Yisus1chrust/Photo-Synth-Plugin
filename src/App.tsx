@@ -931,7 +931,8 @@ export default function App() {
               slotBUrl={slotB?.dataUrl}
               morphValue={morphValue}
               presetPhotos={samplePresets}
-              onImageSelected={(file) => loadSlotA(file, typeof file === 'string' ? 'Preset A' : file.name)}
+              onUploadSlotA={(source, title) => loadSlotA(source, typeof source === 'string' ? (title || 'Image A') : source.name)}
+              onUploadSlotB={(source, title) => loadSlotB(source, typeof source === 'string' ? (title || 'Image B') : source.name)}
               isLoading={isLoading}
               onGetWaveform={(arr) => pluginBridge.getWaveformData(arr)}
               onGetSpectrum={(arr) => globalAudioEngine.getSpectrumData(arr)}

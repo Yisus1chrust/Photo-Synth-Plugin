@@ -4,6 +4,7 @@ import { Image as ImageIcon, X } from 'lucide-react';
 import { Oscilloscope } from './Oscilloscope';
 import { VirtualKeyboard } from './VirtualKeyboard';
 import { sampleGradientColor } from '../utils/colorBlending';
+import { pluginBridge } from '../audio/PluginBridge';
 
 interface ImageDropzoneProps {
   metrics: ImageMetrics | null;
@@ -11,7 +12,8 @@ interface ImageDropzoneProps {
   slotBUrl?: string | null;
   morphValue?: number;
   presetPhotos: PresetPhoto[];
-  onImageSelected: (file: File | string) => void;
+  onUploadSlotA: (fileOrUrl: File | string, title?: string) => void;
+  onUploadSlotB: (fileOrUrl: File | string, title?: string) => void;
   isLoading: boolean;
   onGetWaveform: (array: Uint8Array) => void;
   onGetSpectrum: (array: Uint8Array) => void;
@@ -31,7 +33,8 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   imagePreviewUrl,
   slotBUrl,
   morphValue = 0,
-  onImageSelected,
+  onUploadSlotA,
+  onUploadSlotB,
   isLoading,
   onGetWaveform,
   onGetSpectrum,
@@ -48,6 +51,26 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const isRightHalf = morphValue >= 0.5;
+  const targetSlot: 'A' | 'B' = isRightHalf ? 'B' : 'A';
+  const buttonLabel = isRightHalf ? 'CHANGE IMAGE B' : 'CHANGE IMAGE A';
+
+  const handleTriggerUpload = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (pluginBridge.isNativeEnvironment()) {
+      const res = await pluginBridge.openImageFileChooser(targetSlot);
+      if (res && res.dataUrl) {
+        if (targetSlot === 'B') {
+          onUploadSlotB(res.dataUrl, res.fileName);
+        } else {
+          onUploadSlotA(res.dataUrl, res.fileName);
+        }
+        return;
+      }
+    }
+    fileInputRef.current?.click();
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(true);
@@ -63,14 +86,23 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       if (file.type.startsWith('image/')) {
-        onImageSelected(file);
+        if (targetSlot === 'B') {
+          onUploadSlotB(file, file.name);
+        } else {
+          onUploadSlotA(file, file.name);
+        }
       }
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      onImageSelected(e.target.files[0]);
+      const file = e.target.files[0];
+      if (targetSlot === 'B') {
+        onUploadSlotB(file, file.name);
+      } else {
+        onUploadSlotA(file, file.name);
+      }
       e.target.value = '';
     }
   };
@@ -146,9 +178,11 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
+        onClick={handleTriggerUpload}
         className={`relative flex-1 min-h-0 rounded-lg vst-panel-recessed vst-bezel transition-all cursor-pointer flex flex-col items-center justify-center p-1 sm:p-2 overflow-hidden group ${
-          isDragOver ? 'border-cyan-400 bg-cyan-950/20' : 'hover:border-cyan-500/50'
+          isDragOver
+            ? isRightHalf ? 'border-rose-400 bg-rose-950/20' : 'border-cyan-400 bg-cyan-950/20'
+            : isRightHalf ? 'hover:border-rose-500/50' : 'hover:border-cyan-500/50'
         }`}
       >
         <input
@@ -161,8 +195,8 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
 
         {isLoading ? (
           <div className="flex flex-col items-center gap-2">
-            <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-            <span className="text-[10px] text-cyan-300 animate-pulse font-bold tracking-wider">
+            <div className={`w-6 h-6 border-2 ${isRightHalf ? 'border-rose-400' : 'border-cyan-400'} border-t-transparent rounded-full animate-spin`} />
+            <span className={`text-[10px] ${isRightHalf ? 'text-rose-300' : 'text-cyan-300'} animate-pulse font-bold tracking-wider`}>
               ANALYZING...
             </span>
           </div>
@@ -184,19 +218,30 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
                 style={{ opacity: morphValue }}
               />
             )}
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded backdrop-blur-[1px] z-20 pointer-events-none">
-              <span className="text-[10px] font-bold text-white bg-zinc-900/90 px-2.5 py-1 rounded border border-zinc-700">
-                CHANGE IMAGE A
-              </span>
+
+            {/* Centered Dynamic Action Button: CHANGE IMAGE A / CHANGE IMAGE B (Only appears on hover) */}
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center rounded z-20 pointer-events-none backdrop-blur-[1px]">
+              <button
+                type="button"
+                onClick={handleTriggerUpload}
+                title={`Click to Upload or Replace Image ${targetSlot}`}
+                className={`pointer-events-auto flex items-center justify-center gap-2 px-4 py-2 rounded-md font-mono text-[11px] sm:text-xs font-bold tracking-wider uppercase transition-all duration-200 shadow-2xl backdrop-blur-md vst-btn-3d ${
+                  isRightHalf
+                    ? 'bg-[#151118]/90 hover:bg-[#221727] text-rose-200 hover:text-white border border-rose-500/60 hover:border-rose-400 shadow-[0_0_18px_rgba(244,63,94,0.4)]'
+                    : 'bg-[#0f1520]/90 hover:bg-[#152132] text-cyan-200 hover:text-white border border-cyan-500/60 hover:border-cyan-400 shadow-[0_0_18px_rgba(6,182,212,0.4)]'
+                }`}
+              >
+                {buttonLabel}
+              </button>
             </div>
           </div>
         ) : (
           <div className="flex flex-col items-center text-center gap-1.5 p-2">
-            <div className="w-8 h-8 rounded-lg border border-cyan-500/30 flex items-center justify-center text-cyan-400/80">
+            <div className={`w-8 h-8 rounded-lg border ${isRightHalf ? 'border-rose-500/30 text-rose-400/80' : 'border-cyan-500/30 text-cyan-400/80'} flex items-center justify-center`}>
               <ImageIcon className="w-5 h-5" />
             </div>
             <span className="text-xs font-bold tracking-wider text-zinc-300 uppercase">
-              DROP IMAGE HERE
+              {buttonLabel}
             </span>
           </div>
         )}

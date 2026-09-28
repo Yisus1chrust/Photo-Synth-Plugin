@@ -86,6 +86,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout PhotoSynthAudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "drive", 1 }, "Saturation Drive", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f));
 
+    // Synth Archetype (0: AnalogBrass, 1: DigitalFmBells, 2: HybridWavetable)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "archetype", 1 }, "Synth Archetype", juce::NormalisableRange<float> (0.0f, 2.0f, 1.0f), 0.0f));
+
     // Effects: Delay
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "delayEnabled", 1 }, "Delay Enabled", true));
@@ -196,6 +200,7 @@ void PhotoSynthAudioProcessor::applyAnalysisToParameters(const ImageAnalysisResu
     setParam("drive",     analysis.drive);
     setParam("delayMix",  analysis.delayMix);
     setParam("reverbMix", analysis.reverbMix);
+    setParam("archetype", (float)analysis.archetype);
 }
 
 void PhotoSynthAudioProcessor::updateParametersFromAnalysis()
@@ -351,7 +356,12 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     p.sustain   = *apvts.getRawParameterValue("sustain");
     p.release   = *apvts.getRawParameterValue("release");
     p.drive     = *apvts.getRawParameterValue("drive");
-    p.archetype = currentAnalysis.archetype;
+    float archVal = *apvts.getRawParameterValue("archetype");
+    int archInt = (int)std::round(archVal);
+    if (archInt == 1) p.archetype = SynthArchetype::DigitalFmBells;
+    else if (archInt == 2) p.archetype = SynthArchetype::HybridWavetable;
+    else if (archInt == 0) p.archetype = SynthArchetype::AnalogBrass;
+    else p.archetype = currentAnalysis.archetype;
     p.era       = currentAnalysis.temporalEra.era;
 
     for (int i = 0; i < synth.getNumVoices(); ++i) {

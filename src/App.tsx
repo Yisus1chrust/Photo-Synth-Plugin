@@ -220,12 +220,14 @@ export default function App() {
           setMetrics(morphedM);
           await globalAudioEngine.initAudio();
           globalAudioEngine.updateParameters(morphedP);
+          pluginBridge.syncFullPatch(morphedP, morphedM);
         } else {
           setPatch(data.patch);
           setBaselinePatch(data.patch);
           setMetrics(data.metrics);
           await globalAudioEngine.initAudio();
           globalAudioEngine.updateParameters(data.patch);
+          pluginBridge.syncFullPatch(data.patch, data.metrics);
         }
         setAudioStarted(true);
       } catch (err) {
@@ -259,6 +261,7 @@ export default function App() {
           setBaselinePatch(morphedP);
           setMetrics(morphedM);
           globalAudioEngine.updateParameters(morphedP);
+          pluginBridge.syncFullPatch(morphedP, morphedM);
         }
       } catch (err) {
         console.error('Failed to load Slot B:', err);
@@ -289,6 +292,7 @@ export default function App() {
         setPatch(morphedP);
         setMetrics(morphedM);
         globalAudioEngine.updateParameters(morphedP);
+        pluginBridge.syncFullPatch(morphedP, morphedM);
       }
     },
     [slotA, slotB]
@@ -359,11 +363,13 @@ export default function App() {
         setBaselinePatch(morphedP);
         setMetrics(morphedM);
         globalAudioEngine.updateParameters(morphedP);
+        pluginBridge.syncFullPatch(morphedP, morphedM);
       } else {
         setPatch(userMatch.customPatch);
         setBaselinePatch(userMatch.customPatch);
         setMetrics(userMatch.customMetrics);
         globalAudioEngine.updateParameters(userMatch.customPatch);
+        pluginBridge.syncFullPatch(userMatch.customPatch, userMatch.customMetrics);
       }
       return;
     }
@@ -392,6 +398,7 @@ export default function App() {
         setBaselinePatch(morphedP);
         setMetrics(morphedM);
         globalAudioEngine.updateParameters(morphedP);
+        pluginBridge.syncFullPatch(morphedP, morphedM);
       }
       return;
     }
@@ -539,11 +546,12 @@ export default function App() {
         const blendedPatch = calculateBlendedPatch(baselinePatch, updated);
         setPatch(blendedPatch);
         globalAudioEngine.updateParameters(blendedPatch);
+        pluginBridge.syncFullPatch(blendedPatch, metrics);
 
         return updated;
       });
     },
-    [baselinePatch]
+    [baselinePatch, metrics]
   );
 
   const handleRemoveColorPoint = useCallback(
@@ -555,10 +563,11 @@ export default function App() {
         const blendedPatch = calculateBlendedPatch(baselinePatch, updated);
         setPatch(blendedPatch);
         globalAudioEngine.updateParameters(blendedPatch);
+        pluginBridge.syncFullPatch(blendedPatch, metrics);
         return updated;
       });
     },
-    [baselinePatch]
+    [baselinePatch, metrics]
   );
 
   const handleSaveUserPreset = (name: string, description: string) => {
@@ -621,6 +630,7 @@ export default function App() {
         setPatch(safeDeepClone(target.customPatch));
         setBaselinePatch(safeDeepClone(target.customPatch));
         globalAudioEngine.updateParameters(target.customPatch);
+        pluginBridge.syncFullPatch(target.customPatch, target.customMetrics);
       }
       if (target.customMetrics) {
         setMetrics(safeDeepClone(target.customMetrics));
@@ -666,6 +676,7 @@ export default function App() {
         setMetrics(dataA.metrics);
         setSelectedColorPoints([]);
         globalAudioEngine.updateParameters(dataA.patch);
+        pluginBridge.syncFullPatch(dataA.patch, dataA.metrics);
       } catch (err) {
         console.error('Failed to load preset:', err);
       } finally {
@@ -801,8 +812,8 @@ export default function App() {
                 userPresets={userPresets}
                 onSelectSlotA={handleSelectSlotA}
                 onSelectSlotB={handleSelectSlotB}
-                onUploadSlotA={(file) => loadSlotA(file, file.name)}
-                onUploadSlotB={(file) => loadSlotB(file, file.name)}
+                onUploadSlotA={(source, title) => loadSlotA(source, typeof source === 'string' ? (title || 'Uploaded Image A') : source.name)}
+                onUploadSlotB={(source, title) => loadSlotB(source, typeof source === 'string' ? (title || 'Uploaded Image B') : source.name)}
               />
             </div>
 

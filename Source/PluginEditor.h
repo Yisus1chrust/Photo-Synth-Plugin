@@ -50,6 +50,9 @@ private:
     float lastReportedBpm { 120.0f };
     std::map<juce::String, float> lastReportedParams;
 
+    // Native file dialog support for image loading
+    std::unique_ptr<juce::FileChooser> fileChooser;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhotoSynthAudioEditor)
 };
 

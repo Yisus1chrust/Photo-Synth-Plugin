@@ -80,6 +80,10 @@ class HybridPluginBridge {
     return this.isConnectedToNative;
   }
 
+  public isNativeEnvironment(): boolean {
+    return this.isConnectedToNative;
+  }
+
   /**
    * Initialize native function bindings if running in JUCE 8 WebView.
    */
@@ -91,6 +95,8 @@ class HybridPluginBridge {
       if (juceApi?.getNativeFunction) {
         const fnNames = [
           'setParameter',
+          'syncPatch',
+          'openFileChooser',
           'noteOn',
           'noteOff',
           'setBpm',
@@ -170,19 +176,53 @@ class HybridPluginBridge {
    * Send a parameter change to the C++ audio processor (and WebAudio engine).
    */
   public setParameter(paramId: string, value: number): void {
-    // 1. Send to C++ native engine if running in plugin host
+    // 1. Remap key for C++ APVTS
+    const nativeParamId = paramId === 'cutoffOffset' ? 'cutoff' :
+                          paramId === 'attackTime' ? 'attack' :
+                          paramId === 'decayTime' ? 'decay' :
+                          paramId === 'sustainLevel' ? 'sustain' :
+                          paramId === 'releaseTime' ? 'release' :
+                          paramId === 'masterVolume' ? 'volume' :
+                          paramId === 'limiterEnabled' ? 'limiter' : paramId;
+
     if (this.isConnectedToNative) {
       if (this.nativeFunctions.has('setParameter')) {
-        this.nativeFunctions.get('setParameter')!(paramId, value).catch(() => {});
+        this.nativeFunctions.get('setParameter')!(nativeParamId, value).catch(() => {});
       } else if (window.PhotoSynthNative?.setParameter) {
-        window.PhotoSynthNative.setParameter(paramId, value);
+        window.PhotoSynthNative.setParameter(nativeParamId, value);
       } else if (window.__JUCE__?.backend?.emit) {
-        window.__JUCE__.backend.emit('setParameter', { id: paramId, value });
+        window.__JUCE__.backend.emit('setParameter', { id: nativeParamId, value });
       }
     }
 
     // 2. Always keep web engine in sync as well
-    globalAudioEngine.updateParameters({ [paramId]: value } as any);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const webParamKey = paramId === 'cutoff' ? 'cutoffOffset' :
+                          paramId === 'attack' ? 'attackTime' :
+                          paramId === 'decay' ? 'decayTime' :
+                          paramId === 'sustain' ? 'sustainLevel' :
+                          paramId === 'release' ? 'releaseTime' :
+                          paramId === 'volume' ? 'masterVolume' :
+                          paramId === 'limiter' ? 'limiterEnabled' : paramId;
+      globalAudioEngine.updateParameters({ [webParamKey]: value });
+    }
+  }
+
+  /**
+   * Request native OS file chooser to open an image (PNG/JPG/WebP) in VST/AU.
+   */
+  public async openImageFileChooser(slot: 'A' | 'B'): Promise<{ dataUrl: string; fileName: string } | null> {
+    if (this.isConnectedToNative && this.nativeFunctions.has('openFileChooser')) {
+      try {
+        const res = await this.nativeFunctions.get('openFileChooser')!(slot);
+        if (res && typeof res === 'object' && res.dataUrl) {
+          return { dataUrl: res.dataUrl, fileName: res.fileName || `Image ${slot}` };
+        }
+      } catch (err) {
+        console.warn('Native openFileChooser call failed:', err);
+      }
+    }
+    return null;
   }
 
   /**
@@ -270,6 +310,9 @@ class HybridPluginBridge {
    * Sync complete patch parameters and image analysis to C++ DSP engine.
    */
   public syncFullPatch(patch: PatchParameters, metrics?: ImageMetrics | null): void {
+    const archVal = (patch.engineType === 'digital_fm_bells' || patch.engineType === 'fm_square_bell') ? 1.0 :
+                    (patch.engineType === 'hybrid_wavetable') ? 2.0 : 0.0;
+
     // Sync all primary parameters to the C++ APVTS
     const paramMap: Record<string, number> = {
       cutoff: patch.cutoffOffset ?? 2400,
@@ -282,7 +325,9 @@ class HybridPluginBridge {
       release: patch.releaseTime ?? 0.4,
       drive: patch.physicalModel?.analogSaturationWarmth ?? 0.3,
       limiter: patch.limiterEnabled ? 1.0 : 0.0,
-      volume: patch.masterVolume ?? 0.8,
+      volume: patch.masterVolume ?? -3.0,
+      threshold: patch.threshold ?? -3.0,
+      archetype: archVal,
     };
 
     if (patch.effects) {
@@ -294,8 +339,16 @@ class HybridPluginBridge {
       paramMap['distortionMix'] = patch.effects.distortion?.enabled ? patch.effects.distortion.intensity : 0.0;
     }
 
-    for (const [key, val] of Object.entries(paramMap)) {
-      this.setParameter(key, val);
+    if (this.isConnectedToNative && this.nativeFunctions.has('syncPatch')) {
+      this.nativeFunctions.get('syncPatch')!(paramMap).catch(() => {
+        for (const [key, val] of Object.entries(paramMap)) {
+          this.setParameter(key, val);
+        }
+      });
+    } else {
+      for (const [key, val] of Object.entries(paramMap)) {
+        this.setParameter(key, val);
+      }
     }
 
     // Keep web audio in sync

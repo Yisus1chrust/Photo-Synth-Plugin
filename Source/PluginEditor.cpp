@@ -38,11 +38,88 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 juce::String paramId = args[0].toString();
                 float value = static_cast<float>(args[1].operator double());
 
+                // Remap frontend parameter names to APVTS IDs if needed
+                if (paramId == "cutoffOffset") paramId = "cutoff";
+                else if (paramId == "attackTime") paramId = "attack";
+                else if (paramId == "decayTime") paramId = "decay";
+                else if (paramId == "sustainLevel") paramId = "sustain";
+                else if (paramId == "releaseTime") paramId = "release";
+                else if (paramId == "masterVolume") paramId = "volume";
+                else if (paramId == "limiterEnabled") paramId = "limiter";
+
                 if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
                     param->setValueNotifyingHost(param->convertTo0to1(value));
                 }
             }
             completion(juce::var());
+        })
+        // 1b. syncPatch native function (syncs all patch parameters at once)
+        .withNativeFunction("syncPatch", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 1 && args[0].isObject()) {
+                auto* obj = args[0].getDynamicObject();
+                if (obj != nullptr) {
+                    for (const auto& prop : obj->getProperties()) {
+                        juce::String paramId = prop.name.toString();
+                        float value = static_cast<float>(prop.value.operator double());
+
+                        if (paramId == "cutoffOffset") paramId = "cutoff";
+                        else if (paramId == "attackTime") paramId = "attack";
+                        else if (paramId == "decayTime") paramId = "decay";
+                        else if (paramId == "sustainLevel") paramId = "sustain";
+                        else if (paramId == "releaseTime") paramId = "release";
+                        else if (paramId == "masterVolume") paramId = "volume";
+                        else if (paramId == "limiterEnabled") paramId = "limiter";
+
+                        if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
+                            param->setValueNotifyingHost(param->convertTo0to1(value));
+                        }
+                    }
+                }
+            }
+            completion(juce::var());
+        })
+        // 1c. openFileChooser native function for image loading in VST/AU
+        .withNativeFunction("openFileChooser", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            juce::String slot = args.size() >= 1 ? args[0].toString() : "A";
+
+            fileChooser = std::make_unique<juce::FileChooser>(
+                "Select Image for Slot " + slot,
+                juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
+                "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif");
+
+            auto folderFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+
+            fileChooser->launchAsync(folderFlags, [this, slot, completion](const juce::FileChooser& fc) {
+                auto resultFile = fc.getResult();
+                if (resultFile.existsAsFile()) {
+                    juce::MemoryBlock mb;
+                    if (resultFile.loadFileAsData(mb)) {
+                        juce::String b64 = juce::Base64::toBase64(mb.getData(), mb.getSize());
+                        juce::String ext = resultFile.getFileExtension().toLowerCase();
+                        juce::String mime = "image/png";
+                        if (ext == ".jpg" || ext == ".jpeg") mime = "image/jpeg";
+                        else if (ext == ".webp") mime = "image/webp";
+                        else if (ext == ".gif") mime = "image/gif";
+
+                        auto img = juce::ImageFileFormat::loadFrom(resultFile);
+                        if (img.isValid()) {
+                            if (slot == "B") {
+                                audioProcessor.loadSlotBImage(img, resultFile.getFileNameWithoutExtension());
+                            } else {
+                                audioProcessor.loadSlotAImage(img, resultFile.getFileNameWithoutExtension());
+                            }
+                        }
+
+                        juce::DynamicObject::Ptr resObj = new juce::DynamicObject();
+                        resObj->setProperty("slot", slot);
+                        resObj->setProperty("fileName", resultFile.getFileName());
+                        resObj->setProperty("dataUrl", "data:" + mime + ";base64," + b64);
+                        completion(juce::var(resObj.get()));
+                        return;
+                    }
+                }
+                completion(juce::var());
+            });
         })
         // 2. noteOn native function
         .withNativeFunction("noteOn", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {

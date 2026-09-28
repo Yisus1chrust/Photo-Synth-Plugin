@@ -16,6 +16,35 @@ export interface PolyVoice {
   startTime: number;
 }
 
+export const DEFAULT_PATCH_PARAMS: PatchParameters = {
+  cutoffOffset: 2400,
+  resonance: 1.2,
+  lfoRate: 2.0,
+  lfoDepth: 0.25,
+  masterVolume: -3.0,
+  limiterEnabled: true,
+  threshold: -1.0,
+  attackTime: 0.03,
+  decayTime: 0.35,
+  sustainLevel: 0.7,
+  releaseTime: 0.45,
+  engineType: 'hybrid_wavetable',
+  fmRatio: 2.0,
+  fmAmount: 0.25,
+  detuneCents: 6.0,
+  unisonVoices: 2,
+  subOscLevel: 0.25,
+  delayMix: 0.2,
+  reverbMix: 0.3,
+  opticalFocusDepth: 0.5,
+  gridSymmetryDensity: 0.5,
+  lightAzimuthAngle: 180,
+  lightElevationAngle: 45,
+  chromaticClash: 0.2,
+  semanticDensityWeight: 0.5,
+  temporalEraVal: 0.5,
+};
+
 export class WebAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -53,11 +82,83 @@ export class WebAudioEngine {
 
   private activeVoices: Map<number, PolyVoice> = new Map();
   private fadingVoices: Set<PolyVoice> = new Set();
-  private patchParams: PatchParameters | null = null;
+  private patchParams: PatchParameters = { ...DEFAULT_PATCH_PARAMS };
   private isInitialized = false;
 
   constructor() {
     // AudioContext created lazily on user interaction
+  }
+
+  /**
+   * Safe AudioParam helper: prevents non-finite values from throwing in setTargetAtTime
+   */
+  private safeSetTargetAtTime(
+    param: AudioParam | null | undefined,
+    value: number,
+    startTime: number,
+    timeConstant: number,
+    fallback = 0
+  ): void {
+    if (!param) return;
+    const safeVal = Number.isFinite(value) ? value : fallback;
+    const safeStart = Number.isFinite(startTime) ? startTime : (this.ctx?.currentTime ?? 0);
+    const safeTc = Number.isFinite(timeConstant) && timeConstant > 0 ? timeConstant : 0.05;
+    try {
+      param.setTargetAtTime(safeVal, safeStart, safeTc);
+    } catch {
+      // AudioParam scheduling safety
+    }
+  }
+
+  /**
+   * Safe AudioParam helper: prevents non-finite values from throwing in setValueAtTime
+   */
+  private safeSetValueAtTime(
+    param: AudioParam | null | undefined,
+    value: number,
+    time: number,
+    fallback = 0
+  ): void {
+    if (!param) return;
+    const safeVal = Number.isFinite(value) ? value : fallback;
+    const safeTime = Number.isFinite(time) ? time : (this.ctx?.currentTime ?? 0);
+    try {
+      param.setValueAtTime(safeVal, safeTime);
+    } catch {}
+  }
+
+  /**
+   * Safe AudioParam helper: prevents non-finite values from throwing in linearRampToValueAtTime
+   */
+  private safeLinearRampToValueAtTime(
+    param: AudioParam | null | undefined,
+    value: number,
+    endTime: number,
+    fallback = 0
+  ): void {
+    if (!param) return;
+    const safeVal = Number.isFinite(value) ? value : fallback;
+    const safeEnd = Number.isFinite(endTime) ? endTime : (this.ctx?.currentTime ?? 0) + 0.01;
+    try {
+      param.linearRampToValueAtTime(safeVal, safeEnd);
+    } catch {}
+  }
+
+  /**
+   * Safe AudioParam helper: prevents non-finite values from throwing in exponentialRampToValueAtTime
+   */
+  private safeExponentialRampToValueAtTime(
+    param: AudioParam | null | undefined,
+    value: number,
+    endTime: number,
+    fallback = 0.001
+  ): void {
+    if (!param) return;
+    const safeVal = Number.isFinite(value) && value > 0 ? value : fallback;
+    const safeEnd = Number.isFinite(endTime) ? endTime : (this.ctx?.currentTime ?? 0) + 0.01;
+    try {
+      param.exponentialRampToValueAtTime(safeVal, safeEnd);
+    } catch {}
   }
 
   public async initAudio(): Promise<void> {
@@ -295,56 +396,67 @@ export class WebAudioEngine {
     return curve;
   }
 
-  public updateParameters(params: PatchParameters): void {
-    this.patchParams = params;
+  public updateParameters(params: Partial<PatchParameters>): void {
+    if (!params) return;
+    this.patchParams = {
+      ...(this.patchParams || DEFAULT_PATCH_PARAMS),
+      ...params,
+    };
     if (!this.ctx || !this.isInitialized) return;
 
+    const p = this.patchParams;
     const now = this.ctx.currentTime;
 
     // Dynamic Gain Staging & Automatic Headroom Compensation
-    const resonanceScaling = 1.0 / (1.0 + Math.pow(Math.max(0, params.resonance) / 3.5, 1.2) * 0.35);
-    const fmScaling = 1.0 / (1.0 + (params.fmAmount || 0) * 0.45);
-    const unisonScaling = 1.0 / Math.sqrt(Math.max(1, params.unisonVoices || 1));
-    const bodyScaling = params.physicalModel
-      ? 1.0 / (1.0 + (params.physicalModel.acousticWeight || 0) * 0.5)
+    const resVal = Number.isFinite(p.resonance) ? p.resonance : 1.2;
+    const fmVal = Number.isFinite(p.fmAmount) ? p.fmAmount : 0.25;
+    const unisonVal = Number.isFinite(p.unisonVoices) ? Math.max(1, p.unisonVoices) : 2;
+
+    const resonanceScaling = 1.0 / (1.0 + Math.pow(Math.max(0, resVal) / 3.5, 1.2) * 0.35);
+    const fmScaling = 1.0 / (1.0 + Math.max(0, fmVal) * 0.45);
+    const unisonScaling = 1.0 / Math.sqrt(unisonVal);
+    const bodyScaling = p.physicalModel
+      ? 1.0 / (1.0 + Math.max(0, p.physicalModel.acousticWeight || 0) * 0.5)
       : 1.0;
-    const saturationScaling = params.physicalModel
-      ? 1.0 / (1.0 + (params.physicalModel.analogSaturationWarmth || 0) * 0.35)
+    const saturationScaling = p.physicalModel
+      ? 1.0 / (1.0 + Math.max(0, p.physicalModel.analogSaturationWarmth || 0) * 0.35)
       : 1.0;
 
     const autoHeadroomFactor = Math.min(
       1.0,
-      Math.max(0.40, resonanceScaling * fmScaling * unisonScaling * bodyScaling * saturationScaling)
+      Math.max(0.40, (resonanceScaling * fmScaling * unisonScaling * bodyScaling * saturationScaling) || 0.7)
     );
 
     // Master volume (convert dB to linear gain with auto-headroom scaling)
     if (this.masterGain) {
-      const volDb = Math.max(-60.0, Math.min(6.0, typeof params.masterVolume === 'number' && !isNaN(params.masterVolume) ? params.masterVolume : -3.0));
+      const volDb = Math.max(-60.0, Math.min(6.0, Number.isFinite(p.masterVolume) ? p.masterVolume : -3.0));
       const userMasterGain = Math.pow(10, volDb / 20);
-      const totalMasterGain = Math.max(0.15, userMasterGain * autoHeadroomFactor * 0.55);
-      this.masterGain.gain.setTargetAtTime(totalMasterGain, now, 0.02);
+      const totalMasterGain = Math.max(0.15, (userMasterGain * autoHeadroomFactor * 0.55) || 0.3);
+      this.safeSetTargetAtTime(this.masterGain.gain, totalMasterGain, now, 0.02, 0.3);
     }
 
     // Limiter toggle & threshold
     if (this.limiter) {
-      const threshDb = Math.max(-18.0, Math.min(0.0, typeof params.threshold === 'number' && !isNaN(params.threshold) ? params.threshold : -1.0));
-      const targetThreshold = params.limiterEnabled ? threshDb : -0.5;
-      this.limiter.threshold.setTargetAtTime(targetThreshold, now, 0.02);
-      this.limiter.ratio.setTargetAtTime(params.limiterEnabled ? 4.0 : 2.0, now, 0.02);
-      this.limiter.attack.setTargetAtTime(0.01, now, 0.02);
-      this.limiter.release.setTargetAtTime(0.15, now, 0.02);
+      const threshDb = Math.max(-18.0, Math.min(0.0, Number.isFinite(p.threshold) ? p.threshold : -1.0));
+      const targetThreshold = p.limiterEnabled ? threshDb : -0.5;
+      this.safeSetTargetAtTime(this.limiter.threshold, targetThreshold, now, 0.02, -1.0);
+      this.safeSetTargetAtTime(this.limiter.ratio, p.limiterEnabled ? 4.0 : 2.0, now, 0.02, 4.0);
+      this.safeSetTargetAtTime(this.limiter.attack, 0.01, now, 0.02, 0.01);
+      this.safeSetTargetAtTime(this.limiter.release, 0.15, now, 0.02, 0.15);
     }
 
     // LFO Rate & Depth
     if (this.globalLfo && this.globalLfoGain) {
-      this.globalLfo.frequency.setTargetAtTime(params.lfoRate, now, 0.05);
+      const lfoRateVal = Number.isFinite(p.lfoRate) ? Math.max(0.05, p.lfoRate) : 2.0;
+      const lfoDepthVal = Number.isFinite(p.lfoDepth) ? Math.max(0, Math.min(1.0, p.lfoDepth)) : 0.25;
+      this.safeSetTargetAtTime(this.globalLfo.frequency, lfoRateVal, now, 0.05, 2.0);
       // LFO Depth maps to filter cutoff modulation range (0 to 3000 Hz)
-      const modAmount = params.lfoDepth * 2500;
-      this.globalLfoGain.gain.setTargetAtTime(modAmount, now, 0.05);
+      const modAmount = lfoDepthVal * 2500;
+      this.safeSetTargetAtTime(this.globalLfoGain.gain, modAmount, now, 0.05, 625);
 
       // Custom Periodic Wave for LFO constructed via DFT of image's spatial line profile
-      if (params.customLfoProfile && params.customLfoProfile.length > 0) {
-        const profile = params.customLfoProfile;
+      if (p.customLfoProfile && p.customLfoProfile.length > 0) {
+        const profile = p.customLfoProfile;
         const N = profile.length;
         const numHarmonics = Math.min(16, Math.floor(N / 2));
         const real = new Float32Array(numHarmonics);
@@ -372,29 +484,29 @@ export class WebAudioEngine {
     }
 
     // FX Mix and 6-Effect Matrix toggles & Parameter Updates
-    const fx = params.effects;
+    const fx = p.effects;
 
     if (this.delayMixGain && this.delayNode && this.delayFeedbackGain) {
       const isDelayOn = fx?.delay ? fx.delay.enabled : true;
-      const p1 = fx?.delay?.param1 ?? fx?.delay?.intensity ?? 0.5;
-      const p2 = fx?.delay?.param2 ?? fx?.delay?.intensity ?? 0.5;
-      const timeSec = 0.05 + p1 * 0.75; // 50ms to 800ms
-      const fbVal = isDelayOn ? p2 * 0.85 : 0.0;
-      const mixVal = isDelayOn ? Math.max(params.delayMix || 0, p1 * 0.5) : 0.0;
+      const p1 = Number.isFinite(fx?.delay?.param1) ? fx!.delay!.param1! : (fx?.delay?.intensity ?? 0.5);
+      const p2 = Number.isFinite(fx?.delay?.param2) ? fx!.delay!.param2! : (fx?.delay?.intensity ?? 0.5);
+      const timeSec = Math.max(0.01, Math.min(2.0, 0.05 + p1 * 0.75)); // 50ms to 800ms
+      const fbVal = isDelayOn ? Math.max(0, Math.min(0.95, p2 * 0.85)) : 0.0;
+      const mixVal = isDelayOn ? Math.max(0, Math.min(1.0, Math.max(p.delayMix || 0, p1 * 0.5))) : 0.0;
 
-      this.delayNode.delayTime.setTargetAtTime(timeSec, now, 0.05);
-      this.delayFeedbackGain.gain.setTargetAtTime(fbVal, now, 0.05);
-      this.delayMixGain.gain.setTargetAtTime(mixVal, now, 0.05);
+      this.safeSetTargetAtTime(this.delayNode.delayTime, timeSec, now, 0.05, 0.3);
+      this.safeSetTargetAtTime(this.delayFeedbackGain.gain, fbVal, now, 0.05, 0.0);
+      this.safeSetTargetAtTime(this.delayMixGain.gain, mixVal, now, 0.05, 0.0);
     }
 
     if (this.reverbMixGain && this.reverbNode) {
       const isReverbOn = fx?.reverb ? fx.reverb.enabled : true;
-      const p1 = fx?.reverb?.param1 ?? fx?.reverb?.intensity ?? 0.6;
-      const p2 = fx?.reverb?.param2 ?? fx?.reverb?.intensity ?? 0.6;
-      const wetVal = isReverbOn ? Math.max(params.reverbMix || 0, p1 * 0.8) : 0.0;
-      this.reverbMixGain.gain.setTargetAtTime(wetVal, now, 0.05);
+      const p1 = Number.isFinite(fx?.reverb?.param1) ? fx!.reverb!.param1! : (fx?.reverb?.intensity ?? 0.6);
+      const p2 = Number.isFinite(fx?.reverb?.param2) ? fx!.reverb!.param2! : (fx?.reverb?.intensity ?? 0.6);
+      const wetVal = isReverbOn ? Math.max(0, Math.min(1.0, Math.max(p.reverbMix || 0, p1 * 0.8))) : 0.0;
+      this.safeSetTargetAtTime(this.reverbMixGain.gain, wetVal, now, 0.05, 0.0);
 
-      const targetDecay = 0.5 + p2 * 5.5; // 0.5s to 6.0s
+      const targetDecay = Math.max(0.2, Math.min(10.0, 0.5 + p2 * 5.5)); // 0.5s to 6.0s
       if (Math.abs(targetDecay - this.lastReverbDecay) > 0.3) {
         this.lastReverbDecay = targetDecay;
         try {
@@ -407,58 +519,61 @@ export class WebAudioEngine {
 
     if (this.chorusMixGain) {
       const isChorusOn = fx?.chorus ? fx.chorus.enabled : true;
-      const p2 = fx?.chorus?.param2 ?? fx?.chorus?.intensity ?? 0.45;
-      const val = isChorusOn ? p2 * 0.45 : 0.0;
-      this.chorusMixGain.gain.setTargetAtTime(val, now, 0.05);
+      const p2 = Number.isFinite(fx?.chorus?.param2) ? fx!.chorus!.param2! : (fx?.chorus?.intensity ?? 0.45);
+      const val = isChorusOn ? Math.max(0, Math.min(1.0, p2 * 0.45)) : 0.0;
+      this.safeSetTargetAtTime(this.chorusMixGain.gain, val, now, 0.05, 0.0);
     }
 
     if (this.phaserMixGain) {
       const isPhaserOn = fx?.phaser ? fx.phaser.enabled : true;
-      const p2 = fx?.phaser?.param2 ?? fx?.phaser?.intensity ?? 0.5;
-      const val = isPhaserOn ? p2 * 0.45 : 0.0;
-      this.phaserMixGain.gain.setTargetAtTime(val, now, 0.05);
+      const p2 = Number.isFinite(fx?.phaser?.param2) ? fx!.phaser!.param2! : (fx?.phaser?.intensity ?? 0.5);
+      const val = isPhaserOn ? Math.max(0, Math.min(1.0, p2 * 0.45)) : 0.0;
+      this.safeSetTargetAtTime(this.phaserMixGain.gain, val, now, 0.05, 0.0);
     }
 
     if (this.flangerMixGain) {
       const isFlangerOn = fx?.flanger ? fx.flanger.enabled : true;
-      const p2 = fx?.flanger?.param2 ?? fx?.flanger?.intensity ?? 0.4;
-      const val = isFlangerOn ? p2 * 0.45 : 0.0;
-      this.flangerMixGain.gain.setTargetAtTime(val, now, 0.05);
+      const p2 = Number.isFinite(fx?.flanger?.param2) ? fx!.flanger!.param2! : (fx?.flanger?.intensity ?? 0.4);
+      const val = isFlangerOn ? Math.max(0, Math.min(1.0, p2 * 0.45)) : 0.0;
+      this.safeSetTargetAtTime(this.flangerMixGain.gain, val, now, 0.05, 0.0);
     }
 
     if (this.distortionMixGain) {
       const isDistortionOn = fx?.distortion ? fx.distortion.enabled : true;
-      const p1 = fx?.distortion?.param1 ?? fx?.distortion?.intensity ?? 0.35;
-      const val = isDistortionOn ? p1 * 0.4 : 0.0;
-      this.distortionMixGain.gain.setTargetAtTime(val, now, 0.05);
+      const p1 = Number.isFinite(fx?.distortion?.param1) ? fx!.distortion!.param1! : (fx?.distortion?.intensity ?? 0.35);
+      const val = isDistortionOn ? Math.max(0, Math.min(1.0, p1 * 0.4)) : 0.0;
+      this.safeSetTargetAtTime(this.distortionMixGain.gain, val, now, 0.05, 0.0);
     }
 
     // Physical Modeling & Temporal Era Acoustic Modulation Updates
-    const eraVal = typeof params.temporalEraVal === 'number'
-      ? params.temporalEraVal
-      : (params.temporalEra?.eraVal ?? 0.5);
+    const eraVal = Number.isFinite(p.temporalEraVal)
+      ? p.temporalEraVal!
+      : (p.temporalEra?.eraVal ?? 0.5);
 
-    if (params.physicalModel) {
-      const pm = params.physicalModel;
+    if (p.physicalModel) {
+      const pm = p.physicalModel;
 
       if (this.bodyFilter1 && this.bodyFilter2 && this.bodyFilter3 && this.bodyMixGain) {
         const freqs = pm.bodyResonanceFreqs || [200, 600, 1800];
-        const qVal = Math.max(0.5, 12.0 * (1 - pm.bodyDamping));
-        this.bodyFilter1.frequency.setTargetAtTime(freqs[0], now, 0.05);
-        this.bodyFilter1.Q.setTargetAtTime(qVal, now, 0.05);
-        this.bodyFilter2.frequency.setTargetAtTime(freqs[1], now, 0.05);
-        this.bodyFilter2.Q.setTargetAtTime(qVal, now, 0.05);
-        this.bodyFilter3.frequency.setTargetAtTime(freqs[2], now, 0.05);
-        this.bodyFilter3.Q.setTargetAtTime(qVal, now, 0.05);
-        this.bodyMixGain.gain.setTargetAtTime(pm.acousticWeight * 0.25, now, 0.05);
+        const damping = Number.isFinite(pm.bodyDamping) ? pm.bodyDamping : 0.5;
+        const qVal = Math.max(0.5, 12.0 * (1 - damping));
+        const acWeight = Number.isFinite(pm.acousticWeight) ? pm.acousticWeight : 0.3;
+        this.safeSetTargetAtTime(this.bodyFilter1.frequency, freqs[0], now, 0.05, 200);
+        this.safeSetTargetAtTime(this.bodyFilter1.Q, qVal, now, 0.05, 4.0);
+        this.safeSetTargetAtTime(this.bodyFilter2.frequency, freqs[1], now, 0.05, 600);
+        this.safeSetTargetAtTime(this.bodyFilter2.Q, qVal, now, 0.05, 4.0);
+        this.safeSetTargetAtTime(this.bodyFilter3.frequency, freqs[2], now, 0.05, 1800);
+        this.safeSetTargetAtTime(this.bodyFilter3.Q, qVal, now, 0.05, 4.0);
+        this.safeSetTargetAtTime(this.bodyMixGain.gain, acWeight * 0.25, now, 0.05, 0.0);
       }
 
       if (this.tapeFlutterLfo && this.tapeFlutterGain) {
         const eraFlutterSpeed = eraVal < 0.38 ? 1.8 + (0.38 - eraVal) * 2.5 : 0.8;
         const eraFlutterDepth = eraVal < 0.38 ? 0.35 + (0.38 - eraVal) * 0.45 : 0.05;
-        this.tapeFlutterLfo.frequency.setTargetAtTime(pm.tapeFlutterSpeed ?? eraFlutterSpeed, now, 0.05);
+        const speed = pm.tapeFlutterSpeed ?? eraFlutterSpeed;
         const depthMs = (pm.tapeFlutterDepth ?? eraFlutterDepth) * 0.0006;
-        this.tapeFlutterGain.gain.setTargetAtTime(depthMs, now, 0.05);
+        this.safeSetTargetAtTime(this.tapeFlutterLfo.frequency, speed, now, 0.05, 0.8);
+        this.safeSetTargetAtTime(this.tapeFlutterGain.gain, depthMs, now, 0.05, 0.0001);
       }
 
       if (this.saturationShaper) {
@@ -482,67 +597,70 @@ export class WebAudioEngine {
     }
 
     // 1. Spatial Frequency & "Image Focus" Grain (The Optical Depth Engine)
-    const focusDepth = typeof params.opticalFocusDepth === 'number' ? params.opticalFocusDepth : 0.5;
+    const focusDepth = Number.isFinite(p.opticalFocusDepth) ? p.opticalFocusDepth! : 0.5;
     if (this.reverbMixGain && focusDepth < 0.38) {
       const washMix = (0.38 - focusDepth) * 0.45;
-      this.reverbMixGain.gain.setTargetAtTime(Math.min(0.85, (params.reverbMix || 0.3) + washMix), now, 0.05);
+      const targetWet = Math.min(0.85, (p.reverbMix || 0.3) + washMix);
+      this.safeSetTargetAtTime(this.reverbMixGain.gain, targetWet, now, 0.05, 0.3);
     }
 
     // 2. Symmetry, Geometry & Fractal Grid Density (The Architectural Sequencer)
-    const gridSymmetry = typeof params.gridSymmetryDensity === 'number' ? params.gridSymmetryDensity : 0.5;
+    const gridSymmetry = Number.isFinite(p.gridSymmetryDensity) ? p.gridSymmetryDensity! : 0.5;
     if (this.globalLfo && this.globalLfoGain) {
       if (gridSymmetry > 0.5) {
         const seqRate = 2.0 * Math.pow(2, Math.floor((gridSymmetry - 0.5) * 4)); // 2Hz, 4Hz, 8Hz, 16Hz
-        this.globalLfo.frequency.setTargetAtTime(seqRate, now, 0.05);
-        this.globalLfoGain.gain.setTargetAtTime(250.0 + gridSymmetry * 450.0, now, 0.05);
+        this.safeSetTargetAtTime(this.globalLfo.frequency, seqRate, now, 0.05, 2.0);
+        this.safeSetTargetAtTime(this.globalLfoGain.gain, 250.0 + gridSymmetry * 450.0, now, 0.05, 300);
       } else {
         const droneRate = 0.1 + gridSymmetry * 0.8;
-        this.globalLfo.frequency.setTargetAtTime(droneRate, now, 0.05);
-        this.globalLfoGain.gain.setTargetAtTime(140.0, now, 0.05);
+        this.safeSetTargetAtTime(this.globalLfo.frequency, droneRate, now, 0.05, 0.5);
+        this.safeSetTargetAtTime(this.globalLfoGain.gain, 140.0, now, 0.05, 140);
       }
     }
 
     // 3. Lighting Angle & Shadow Azimuth (The Virtual Soundstage Panner)
-    const azimuth = typeof params.lightAzimuthAngle === 'number' ? params.lightAzimuthAngle : 180;
-    const elevation = typeof params.lightElevationAngle === 'number' ? params.lightElevationAngle : 45;
+    const azimuth = Number.isFinite(p.lightAzimuthAngle) ? p.lightAzimuthAngle! : 180;
+    const elevation = Number.isFinite(p.lightElevationAngle) ? p.lightElevationAngle! : 45;
     if (this.pannerNode) {
       let panX = Math.cos((azimuth * Math.PI) / 180);
       if (elevation > 65) {
         panX *= 0.25;
       }
-      this.pannerNode.pan.setTargetAtTime(Math.max(-0.92, Math.min(0.92, panX * 0.75)), now, 0.05);
+      this.safeSetTargetAtTime(this.pannerNode.pan, Math.max(-0.92, Math.min(0.92, panX * 0.75)), now, 0.05, 0.0);
     }
 
     // 4. Color Contrast Saturation & Complementary Hue Clash (The Harmonic Tension Generator)
-    const chromaticClash = typeof params.chromaticClash === 'number' ? params.chromaticClash : 0.2;
+    const chromaticClash = Number.isFinite(p.chromaticClash) ? p.chromaticClash! : 0.2;
     if (this.ringModGain && this.ringModOsc) {
       if (chromaticClash > 0.35) {
         const clashFreq = 120 + chromaticClash * 180;
-        this.ringModOsc.frequency.setTargetAtTime(clashFreq, now, 0.05);
-        this.ringModGain.gain.setTargetAtTime((chromaticClash - 0.35) * 0.16, now, 0.05);
+        this.safeSetTargetAtTime(this.ringModOsc.frequency, clashFreq, now, 0.05, 150);
+        this.safeSetTargetAtTime(this.ringModGain.gain, (chromaticClash - 0.35) * 0.16, now, 0.05, 0.0);
       } else {
-        this.ringModGain.gain.setTargetAtTime(0.0, now, 0.05);
+        this.safeSetTargetAtTime(this.ringModGain.gain, 0.0, now, 0.05, 0.0);
       }
     }
 
     // 5. Semantic Object "Weight" & Density (The Material Physics Matrix)
-    const densityWeight = typeof params.semanticDensityWeight === 'number' ? params.semanticDensityWeight : 0.5;
+    const densityWeight = Number.isFinite(p.semanticDensityWeight) ? p.semanticDensityWeight! : 0.5;
     if (this.bodyFilter1 && this.bodyFilter2 && this.bodyFilter3) {
       if (densityWeight > 0.6) {
-        this.bodyFilter1.frequency.setTargetAtTime(45, now, 0.05);
-        this.bodyFilter2.frequency.setTargetAtTime(95, now, 0.05);
-        this.bodyFilter3.frequency.setTargetAtTime(220, now, 0.05);
+        this.safeSetTargetAtTime(this.bodyFilter1.frequency, 45, now, 0.05, 45);
+        this.safeSetTargetAtTime(this.bodyFilter2.frequency, 95, now, 0.05, 95);
+        this.safeSetTargetAtTime(this.bodyFilter3.frequency, 220, now, 0.05, 220);
       } else if (densityWeight < 0.35) {
-        this.bodyFilter1.frequency.setTargetAtTime(1150, now, 0.05);
-        this.bodyFilter2.frequency.setTargetAtTime(2400, now, 0.05);
-        this.bodyFilter3.frequency.setTargetAtTime(3600, now, 0.05);
+        this.safeSetTargetAtTime(this.bodyFilter1.frequency, 1150, now, 0.05, 1150);
+        this.safeSetTargetAtTime(this.bodyFilter2.frequency, 2400, now, 0.05, 2400);
+        this.safeSetTargetAtTime(this.bodyFilter3.frequency, 3600, now, 0.05, 3600);
       }
     }
 
     // Update ongoing active voice filters
+    const safeCutoff = Number.isFinite(p.cutoffOffset) ? Math.max(50, Math.min(20000, p.cutoffOffset)) : 2400;
+    const safeRes = Number.isFinite(p.resonance) ? Math.max(0.1, Math.min(10.0, p.resonance)) : 1.2;
     this.activeVoices.forEach((voice) => {
-      voice.filter.frequency.setTargetAtTime(params.cutoffOffset, now, 0.05);
-      voice.filter.Q.setTargetAtTime(params.resonance, now, 0.05);
+      this.safeSetTargetAtTime(voice.filter.frequency, safeCutoff, now, 0.05, 2400);
+      this.safeSetTargetAtTime(voice.filter.Q, safeRes, now, 0.05, 1.2);
     });
   }
 
@@ -552,8 +670,9 @@ export class WebAudioEngine {
     try {
       voice.ampGain.gain.cancelScheduledValues(now);
       const currentVal = voice.ampGain.gain.value;
-      voice.ampGain.gain.setValueAtTime(Math.max(0.0001, currentVal), now);
-      voice.ampGain.gain.linearRampToValueAtTime(0.0, now + fadeSec);
+      const safeVal = Number.isFinite(currentVal) ? Math.max(0.0001, currentVal) : 0.0001;
+      this.safeSetValueAtTime(voice.ampGain.gain, safeVal, now);
+      this.safeLinearRampToValueAtTime(voice.ampGain.gain, 0.0, now + fadeSec);
     } catch {
       // ignore scheduling errors if already inactive
     }
@@ -578,7 +697,7 @@ export class WebAudioEngine {
   }
 
   public noteOn(midiNote: number, velocity = 0.8): void {
-    if (!this.isInitialized || !this.ctx || !this.patchParams) return;
+    if (!this.isInitialized || !this.ctx) return;
 
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -633,15 +752,13 @@ export class WebAudioEngine {
     }
 
     const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
-    const params = this.patchParams;
+    const safeFreq = Number.isFinite(freq) && freq > 0 ? freq : 440;
+    const params = this.patchParams || DEFAULT_PATCH_PARAMS;
     const now = this.ctx.currentTime;
 
-    // Dynamic Physical Transient Exciter (Hammer / Pluck / Strike / Bow)
-    const tp = params.physicalModel?.transientProfile;
-
-    // 2. Voice Amp Gain Envelope (Guaranteed 2ms micro-attack floor for zero-latency response)
+    // 2. Voice Amp Gain Envelope (Guaranteed smooth floor for zero-latency response)
     const ampGain = this.ctx.createGain();
-    ampGain.gain.setValueAtTime(0, now);
+    this.safeSetValueAtTime(ampGain.gain, 0, now);
 
     let engineGainBoost = 1.0;
     if (params.engineType === 'acoustic_piano_organ') {
@@ -656,31 +773,35 @@ export class WebAudioEngine {
 
     const activeVoiceCount = Math.max(1, this.activeVoices.size + 1);
     const polyphonicScale = Math.max(0.70, 1.0 / Math.pow(activeVoiceCount, 0.15));
-    const unisonScale = 1.0 / Math.sqrt(Math.max(1, params.unisonVoices || 1));
-    const peakAmp = Math.min(0.45, Math.max(0.10, velocity * 0.35 * unisonScale * polyphonicScale * engineGainBoost));
+    const unisonVal = Number.isFinite(params.unisonVoices) ? Math.max(1, params.unisonVoices) : 2;
+    const unisonScale = 1.0 / Math.sqrt(unisonVal);
+    const vel = Number.isFinite(velocity) ? Math.max(0.05, Math.min(1.0, velocity)) : 0.8;
+    const peakAmp = Math.min(0.45, Math.max(0.10, vel * 0.35 * unisonScale * polyphonicScale * engineGainBoost));
 
     // ADSR Envelope: 12ms smooth de-clicked attack floor prevents waveform step discontinuities
     const microAttackFloor = 0.012;
-    const safeAttack = Math.max(microAttackFloor, Math.min(5.0, params.attackTime || 0.025));
-    const safeDecay = Math.max(0.02, Math.min(10.0, params.decayTime || 0.8));
-    const safeSustain = Math.max(0.35, Math.min(1.0, params.sustainLevel ?? 0.7));
+    const safeAttack = Number.isFinite(params.attackTime) ? Math.max(microAttackFloor, Math.min(5.0, params.attackTime)) : 0.025;
+    const safeDecay = Number.isFinite(params.decayTime) ? Math.max(0.02, Math.min(10.0, params.decayTime)) : 0.8;
+    const safeSustain = Number.isFinite(params.sustainLevel) ? Math.max(0.35, Math.min(1.0, params.sustainLevel)) : 0.7;
 
     // Smooth onset ramp starting at precise t=now: zero amplitude at start, ramping to peakAmp
-    ampGain.gain.setValueAtTime(0.0, now);
-    ampGain.gain.linearRampToValueAtTime(peakAmp, now + safeAttack);
-    ampGain.gain.setTargetAtTime(
+    this.safeSetValueAtTime(ampGain.gain, 0.0, now);
+    this.safeLinearRampToValueAtTime(ampGain.gain, peakAmp, now + safeAttack);
+    this.safeSetTargetAtTime(
+      ampGain.gain,
       peakAmp * safeSustain,
       now + safeAttack,
-      safeDecay
+      safeDecay,
+      peakAmp * 0.7
     );
 
     // 3. Resonant Filter
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    const safeCutoff = Math.max(350, Math.min(20000, params.cutoffOffset || 2500));
-    const safeRes = Math.max(0.1, Math.min(10.0, params.resonance || 1.0));
-    filter.frequency.setValueAtTime(safeCutoff, now);
-    filter.Q.setValueAtTime(safeRes, now);
+    const safeCutoff = Number.isFinite(params.cutoffOffset) ? Math.max(350, Math.min(20000, params.cutoffOffset)) : 2500;
+    const safeRes = Number.isFinite(params.resonance) ? Math.max(0.1, Math.min(10.0, params.resonance)) : 1.0;
+    this.safeSetValueAtTime(filter.frequency, safeCutoff, now);
+    this.safeSetValueAtTime(filter.Q, safeRes, now);
 
     // Connect LFO to Filter
     if (this.globalLfoGain) {
@@ -697,23 +818,23 @@ export class WebAudioEngine {
     let hammerGain: GainNode | undefined;
     let shaperNode: WaveShaperNode | undefined;
 
-    const detuneVal = params.detuneCents || 5.0;
+    const detuneVal = Number.isFinite(params.detuneCents) ? params.detuneCents : 5.0;
 
     if (params.engineType === 'acoustic_piano_organ') {
       osc1 = this.ctx.createOscillator();
       osc1.type = 'triangle';
-      osc1.frequency.setValueAtTime(freq, now);
+      this.safeSetValueAtTime(osc1.frequency, safeFreq, now);
 
       osc2 = this.ctx.createOscillator();
       osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(freq * Math.max(1.0, params.fmRatio || 2.0), now);
+      this.safeSetValueAtTime(osc2.frequency, safeFreq * Math.max(1.0, params.fmRatio || 2.0), now);
 
       subOsc = this.ctx.createOscillator();
       subOsc.type = 'sine';
-      subOsc.frequency.setValueAtTime(freq / 2, now);
+      this.safeSetValueAtTime(subOsc.frequency, safeFreq / 2, now);
 
       const subGain = this.ctx.createGain();
-      subGain.gain.value = (params.subOscLevel || 0.25) * 0.35;
+      subGain.gain.value = (Number.isFinite(params.subOscLevel) ? params.subOscLevel : 0.25) * 0.35;
       subOsc.connect(subGain);
       subGain.connect(filter);
       subOsc.start(now);
@@ -724,20 +845,20 @@ export class WebAudioEngine {
     } else if (params.engineType === 'overdriven_saw_stack' || params.engineType === 'analog_brass') {
       osc1 = this.ctx.createOscillator();
       osc1.type = 'sawtooth';
-      osc1.frequency.setValueAtTime(freq, now);
-      osc1.detune.setValueAtTime(-detuneVal * 1.5, now);
+      this.safeSetValueAtTime(osc1.frequency, safeFreq, now);
+      this.safeSetValueAtTime(osc1.detune, -detuneVal * 1.5, now);
 
       osc2 = this.ctx.createOscillator();
       osc2.type = 'sawtooth';
-      osc2.frequency.setValueAtTime(freq, now);
-      osc2.detune.setValueAtTime(detuneVal * 1.5, now);
+      this.safeSetValueAtTime(osc2.frequency, safeFreq, now);
+      this.safeSetValueAtTime(osc2.detune, detuneVal * 1.5, now);
 
       subOsc = this.ctx.createOscillator();
       subOsc.type = 'sawtooth';
-      subOsc.frequency.setValueAtTime(freq * 1.004, now);
+      this.safeSetValueAtTime(subOsc.frequency, safeFreq * 1.004, now);
 
       const subGain = this.ctx.createGain();
-      subGain.gain.value = (params.subOscLevel || 0.25) * 0.35;
+      subGain.gain.value = (Number.isFinite(params.subOscLevel) ? params.subOscLevel : 0.25) * 0.35;
       subOsc.connect(subGain);
 
       // Clean signal path straight to resonant filter for lush analog brass
@@ -750,23 +871,23 @@ export class WebAudioEngine {
     } else if (params.engineType === 'fm_square_bell' || params.engineType === 'digital_fm_bells') {
       osc1 = this.ctx.createOscillator();
       osc1.type = 'square';
-      osc1.frequency.setValueAtTime(freq, now);
+      this.safeSetValueAtTime(osc1.frequency, safeFreq, now);
 
       osc2 = this.ctx.createOscillator();
       osc2.type = 'square';
-      osc2.frequency.setValueAtTime(freq * Math.max(1, Math.round(params.fmRatio || 2.0)), now);
-      osc2.detune.setValueAtTime(detuneVal, now);
+      this.safeSetValueAtTime(osc2.frequency, safeFreq * Math.max(1, Math.round(params.fmRatio || 2.0)), now);
+      this.safeSetValueAtTime(osc2.detune, detuneVal, now);
 
       fmModulator = this.ctx.createOscillator();
       fmModulator.type = 'sine';
-      fmModulator.frequency.setValueAtTime(freq * (params.fmRatio || 3.0), now);
+      this.safeSetValueAtTime(fmModulator.frequency, safeFreq * (params.fmRatio || 3.0), now);
 
       fmGain = this.ctx.createGain();
-      const fmModDepth = freq * (params.fmAmount || 0.3) * 1.5;
+      const fmModDepth = safeFreq * (Number.isFinite(params.fmAmount) ? params.fmAmount : 0.3) * 1.5;
       const fmRamp = 0.008;
-      fmGain.gain.setValueAtTime(0, now);
-      fmGain.gain.linearRampToValueAtTime(fmModDepth, now + fmRamp);
-      fmGain.gain.exponentialRampToValueAtTime(0.001, now + fmRamp + Math.max(0.08, params.decayTime * 0.8));
+      this.safeSetValueAtTime(fmGain.gain, 0, now);
+      this.safeLinearRampToValueAtTime(fmGain.gain, fmModDepth, now + fmRamp);
+      this.safeExponentialRampToValueAtTime(fmGain.gain, 0.001, now + fmRamp + Math.max(0.08, (params.decayTime || 0.5) * 0.8));
 
       fmModulator.connect(fmGain);
       fmGain.connect(osc1.frequency);
@@ -774,9 +895,9 @@ export class WebAudioEngine {
 
       subOsc = this.ctx.createOscillator();
       subOsc.type = 'square';
-      subOsc.frequency.setValueAtTime(freq / 2, now);
+      this.safeSetValueAtTime(subOsc.frequency, safeFreq / 2, now);
       const subGain = this.ctx.createGain();
-      subGain.gain.value = (params.subOscLevel || 0.2) * 0.3;
+      subGain.gain.value = (Number.isFinite(params.subOscLevel) ? params.subOscLevel : 0.2) * 0.3;
       subOsc.connect(subGain);
       subGain.connect(filter);
       subOsc.start(now);
@@ -787,18 +908,18 @@ export class WebAudioEngine {
     } else {
       osc1 = this.ctx.createOscillator();
       osc1.type = 'sawtooth';
-      osc1.frequency.setValueAtTime(freq, now);
+      this.safeSetValueAtTime(osc1.frequency, safeFreq, now);
 
       osc2 = this.ctx.createOscillator();
       osc2.type = 'square';
-      osc2.frequency.setValueAtTime(freq, now);
-      osc2.detune.setValueAtTime(detuneVal * 1.5, now);
+      this.safeSetValueAtTime(osc2.frequency, safeFreq, now);
+      this.safeSetValueAtTime(osc2.detune, detuneVal * 1.5, now);
 
       subOsc = this.ctx.createOscillator();
       subOsc.type = 'square';
-      subOsc.frequency.setValueAtTime(freq / 2, now);
+      this.safeSetValueAtTime(subOsc.frequency, safeFreq / 2, now);
       const subGain = this.ctx.createGain();
-      subGain.gain.value = (params.subOscLevel || 0.25) * 0.35;
+      subGain.gain.value = (Number.isFinite(params.subOscLevel) ? params.subOscLevel : 0.25) * 0.35;
       subOsc.connect(subGain);
       subGain.connect(filter);
       subOsc.start(now);
@@ -819,7 +940,7 @@ export class WebAudioEngine {
 
     this.activeVoices.set(midiNote, {
       note: midiNote,
-      velocity,
+      velocity: vel,
       osc1,
       osc2,
       subOsc,
@@ -835,20 +956,22 @@ export class WebAudioEngine {
   }
 
   public noteOff(midiNote: number): void {
-    if (!this.ctx || !this.activeVoices.has(midiNote) || !this.patchParams) return;
+    if (!this.ctx || !this.activeVoices.has(midiNote)) return;
 
     const voice = this.activeVoices.get(midiNote)!;
     this.activeVoices.delete(midiNote);
     this.fadingVoices.add(voice);
 
     const now = this.ctx.currentTime;
-    const release = Math.max(0.02, this.patchParams.releaseTime);
+    const p = this.patchParams || DEFAULT_PATCH_PARAMS;
+    const release = Number.isFinite(p.releaseTime) ? Math.max(0.02, p.releaseTime) : 0.45;
 
     try {
       voice.ampGain.gain.cancelScheduledValues(now);
       const currentGain = voice.ampGain.gain.value;
-      voice.ampGain.gain.setValueAtTime(Math.max(0.0001, currentGain), now);
-      voice.ampGain.gain.linearRampToValueAtTime(0.00001, now + release);
+      const safeVal = Number.isFinite(currentGain) ? Math.max(0.0001, currentGain) : 0.0001;
+      this.safeSetValueAtTime(voice.ampGain.gain, safeVal, now);
+      this.safeLinearRampToValueAtTime(voice.ampGain.gain, 0.00001, now + release);
     } catch {
       // ignore
     }

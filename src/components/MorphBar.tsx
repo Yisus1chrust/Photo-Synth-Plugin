@@ -1,6 +1,7 @@
 import React from 'react';
 import { PresetPhoto } from '../types/synth';
 import { Play, Pause, Sliders, Layers } from 'lucide-react';
+import { pluginBridge } from '../audio/PluginBridge';
 
 interface ImageSlotState {
   id: string;
@@ -19,8 +20,8 @@ interface MorphBarProps {
   userPresets: PresetPhoto[];
   onSelectSlotA: (presetId: string) => void;
   onSelectSlotB: (presetId: string) => void;
-  onUploadSlotA: (file: File) => void;
-  onUploadSlotB: (file: File) => void;
+  onUploadSlotA: (fileOrUrl: File | string, title?: string) => void;
+  onUploadSlotB: (fileOrUrl: File | string, title?: string) => void;
 }
 
 export const MorphBar: React.FC<MorphBarProps> = ({
@@ -41,6 +42,28 @@ export const MorphBar: React.FC<MorphBarProps> = ({
   const fileInputB = React.useRef<HTMLInputElement>(null);
 
   const morphPercent = Math.round(morphValue * 100);
+
+  const handleTriggerUploadA = async () => {
+    if (pluginBridge.isNativeEnvironment()) {
+      const res = await pluginBridge.openImageFileChooser('A');
+      if (res && res.dataUrl) {
+        onUploadSlotA(res.dataUrl, res.fileName);
+        return;
+      }
+    }
+    fileInputA.current?.click();
+  };
+
+  const handleTriggerUploadB = async () => {
+    if (pluginBridge.isNativeEnvironment()) {
+      const res = await pluginBridge.openImageFileChooser('B');
+      if (res && res.dataUrl) {
+        onUploadSlotB(res.dataUrl, res.fileName);
+        return;
+      }
+    }
+    fileInputB.current?.click();
+  };
 
   return (
     <div className="flex items-center gap-2 vst-panel-recessed rounded-lg px-2 py-1 text-xs select-none shadow-inner">
@@ -78,9 +101,8 @@ export const MorphBar: React.FC<MorphBarProps> = ({
           onChange={(e) => {
             const val = e.target.value;
             if (val === '__upload__') {
-              fileInputA.current?.click();
-              // Reset select so it never stays stuck on __upload__
               e.target.value = slotA?.id || '';
+              handleTriggerUploadA();
             } else {
               onSelectSlotA(val);
             }
@@ -179,9 +201,8 @@ export const MorphBar: React.FC<MorphBarProps> = ({
           onChange={(e) => {
             const val = e.target.value;
             if (val === '__upload__') {
-              fileInputB.current?.click();
-              // Reset select so it never stays stuck on __upload__
               e.target.value = slotB?.id || '';
+              handleTriggerUploadB();
             } else {
               onSelectSlotB(val);
             }

@@ -34,6 +34,7 @@ juce_add_plugin(PhotoSynth
     FORMATS VST3 AU Standalone
     PRODUCT_NAME "Photo Synth"
     BUNDLE_ID "com.modularsoundtechnologies.photosynth"
+    NEEDS_WEBVIEW2 TRUE
 )
 
 # Source files
@@ -57,6 +58,7 @@ target_sources(PhotoSynth PRIVATE
 # Compile Definitions: JUCE_WEB_BROWSER=1 enables the EVERSYNTH Hybrid WebView engine
 target_compile_definitions(PhotoSynth PRIVATE
     JUCE_WEB_BROWSER=1
+    JUCE_USE_WIN_WEBVIEW2=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -77,3 +79,16 @@ target_link_libraries(PhotoSynth PRIVATE
     juce::juce_data_structures
     juce::juce_events
 )
+
+# Linux WebKitGTK linkage for WebBrowserComponent
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WEBKIT webkit2gtk-4.0)
+    if(NOT WEBKIT_FOUND)
+        pkg_check_modules(WEBKIT webkit2gtk-4.1)
+    endif()
+    if(WEBKIT_FOUND)
+        target_include_directories(PhotoSynth PRIVATE ${WEBKIT_INCLUDE_DIRS})
+        target_link_libraries(PhotoSynth PRIVATE ${WEBKIT_LIBRARIES})
+    endif()
+endif()

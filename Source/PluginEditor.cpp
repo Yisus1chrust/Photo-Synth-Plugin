@@ -196,8 +196,8 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
     // Navigate to offline local resource provider root
     webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
 
-    // Start 60 FPS timer for real-time oscilloscope & automation streaming
-    startTimerHz(60);
+    // Start 30 FPS timer for real-time oscilloscope & automation streaming (gentle on WebView IPC)
+    startTimerHz(30);
 }
 
 PhotoSynthAudioEditor::~PhotoSynthAudioEditor()

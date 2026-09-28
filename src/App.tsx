@@ -127,77 +127,106 @@ export default function App() {
   }, []);
 
   // Helper to process image source into compact base64 data & metrics
+  // Image analysis & loading pipeline
   const processImageSourceToData = useCallback(
-    async (source: File | string, presetTitle?: string) => {
+    async (source: File | Blob | string, presetTitle?: string) => {
       let previewUrl = '';
-      let loadedImg: HTMLImageElement;
+      let objectUrlToRevoke: string | null = null;
 
-      if (source instanceof File) {
-        // Read directly as Base64 Data URL to avoid any CORS/blob restrictions across browsers
-        const base64Str = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = (e) => reject(e);
-          reader.readAsDataURL(source);
-        });
-
-        previewUrl = base64Str;
-        loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = (e) => reject(e);
-          img.src = base64Str;
-        });
-      } else {
-        loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          if (typeof source === 'string' && source.startsWith('http')) {
-            img.crossOrigin = 'anonymous';
-          }
-          img.onload = () => resolve(img);
-          img.onerror = (e) => reject(e);
-          img.src = source;
-        });
-        previewUrl = source;
-      }
-
-      // Resize down to max 600px for lightning-fast analysis and compact storage
       try {
-        const canvas = document.createElement('canvas');
-        const maxDim = 600;
-        let w = loadedImg.width || 300;
-        let h = loadedImg.height || 300;
-        if (w > maxDim || h > maxDim) {
-          if (w > h) {
-            h = Math.round((h * maxDim) / w);
-            w = maxDim;
-          } else {
-            w = Math.round((w * maxDim) / h);
-            h = maxDim;
+        if (typeof source === 'object' && source !== null && 'size' in source) {
+          // If File or Blob, create ObjectURL for instantaneous zero-overhead decoding
+          try {
+            previewUrl = URL.createObjectURL(source as Blob);
+            objectUrlToRevoke = previewUrl;
+          } catch {
+            // Fallback to FileReader if objectURL is restricted
+            previewUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = (e) => reject(e);
+              reader.readAsDataURL(source as Blob);
+            });
           }
+        } else if (typeof source === 'string') {
+          previewUrl = source;
         }
-        canvas.width = Math.max(1, w);
-        canvas.height = Math.max(1, h);
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(loadedImg, 0, 0, canvas.width, canvas.height);
-          previewUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+        // Decode HTMLImageElement with safety timeout to prevent any thread hang
+        const loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          let settled = false;
+
+          const done = (ok: boolean, err?: any) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            if (ok && img.naturalWidth > 0) resolve(img);
+            else reject(err || new Error('Image decoding failed'));
+          };
+
+          const timeoutId = setTimeout(() => {
+            if (img.complete && img.naturalWidth > 0) done(true);
+            else done(false, new Error('Image loading timed out'));
+          }, 4000);
+
+          img.onload = () => done(true);
+          img.onerror = (e) => done(false, e);
+          img.crossOrigin = 'anonymous';
+          img.src = previewUrl;
+
+          if (img.complete && img.naturalWidth > 0) {
+            done(true);
+          }
+        });
+
+        // Resize down to max 512px for responsive analysis & compact memory footprint
+        let exportDataUrl = previewUrl;
+        try {
+          const canvas = document.createElement('canvas');
+          const maxDim = 512;
+          let w = loadedImg.naturalWidth || loadedImg.width || 300;
+          let h = loadedImg.naturalHeight || loadedImg.height || 300;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+          canvas.width = Math.max(1, w);
+          canvas.height = Math.max(1, h);
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(loadedImg, 0, 0, canvas.width, canvas.height);
+            exportDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          }
+        } catch {
+          // Keep previewUrl if canvas export is restricted
         }
-      } catch {
-        // Keep original previewUrl if canvas export is restricted
+
+        // Brief yield to browser event loop to let UI render smoothly
+        await new Promise((r) => setTimeout(r, 20));
+
+        const { metrics: extractedMetrics, baselinePatch: generatedPatch } =
+          await analyzeImage(loadedImg);
+
+        return {
+          dataUrl: exportDataUrl,
+          metrics: extractedMetrics,
+          patch: generatedPatch,
+          title:
+            presetTitle ||
+            (typeof source === 'string' ? 'Preset Image' : (source as File).name || 'Custom Image'),
+        };
+      } finally {
+        if (objectUrlToRevoke) {
+          // Clean up memory after image has been rendered to canvas
+          setTimeout(() => URL.revokeObjectURL(objectUrlToRevoke!), 1000);
+        }
       }
-
-      const { metrics: extractedMetrics, baselinePatch: generatedPatch } =
-        await analyzeImage(loadedImg);
-
-      return {
-        dataUrl: previewUrl,
-        metrics: extractedMetrics,
-        patch: generatedPatch,
-        title:
-          presetTitle ||
-          (typeof source === 'string' ? 'Preset Image' : source.name || 'Custom Image'),
-      };
     },
     []
   );
@@ -207,6 +236,12 @@ export default function App() {
     async (source: File | string, presetTitle?: string, presetId?: string) => {
       setIsLoading(true);
       setSelectedColorPoints([]);
+
+      // Safety timeout so UI spinner is never locked if anything unexpected occurs
+      const safetySpinnerTimeout = setTimeout(() => {
+        setIsLoading(false);
+      }, 5000);
+
       try {
         const data = await processImageSourceToData(source, presetTitle);
         const newSlotA: SlotData = {
@@ -226,21 +261,28 @@ export default function App() {
           setPatch(morphedP);
           setBaselinePatch(morphedP);
           setMetrics(morphedM);
-          await globalAudioEngine.initAudio();
-          globalAudioEngine.updateParameters(morphedP);
+
+          if (!pluginBridge.isNativeEnvironment()) {
+            globalAudioEngine.initAudio().catch(() => {});
+            globalAudioEngine.updateParameters(morphedP);
+          }
           pluginBridge.syncFullPatch(morphedP, morphedM);
         } else {
           setPatch(data.patch);
           setBaselinePatch(data.patch);
           setMetrics(data.metrics);
-          await globalAudioEngine.initAudio();
-          globalAudioEngine.updateParameters(data.patch);
+
+          if (!pluginBridge.isNativeEnvironment()) {
+            globalAudioEngine.initAudio().catch(() => {});
+            globalAudioEngine.updateParameters(data.patch);
+          }
           pluginBridge.syncFullPatch(data.patch, data.metrics);
         }
         setAudioStarted(true);
       } catch (err) {
         console.error('Failed to load Slot A:', err);
       } finally {
+        clearTimeout(safetySpinnerTimeout);
         setIsLoading(false);
       }
     },
@@ -250,6 +292,11 @@ export default function App() {
   // Load Slot B
   const loadSlotB = useCallback(
     async (source: File | string, presetTitle?: string, presetId?: string) => {
+      setIsLoading(true);
+      const safetySpinnerTimeout = setTimeout(() => {
+        setIsLoading(false);
+      }, 5000);
+
       try {
         const data = await processImageSourceToData(source, presetTitle);
         const newSlotB: SlotData = {
@@ -268,11 +315,18 @@ export default function App() {
           setPatch(morphedP);
           setBaselinePatch(morphedP);
           setMetrics(morphedM);
-          globalAudioEngine.updateParameters(morphedP);
+
+          if (!pluginBridge.isNativeEnvironment()) {
+            globalAudioEngine.initAudio().catch(() => {});
+            globalAudioEngine.updateParameters(morphedP);
+          }
           pluginBridge.syncFullPatch(morphedP, morphedM);
         }
       } catch (err) {
         console.error('Failed to load Slot B:', err);
+      } finally {
+        clearTimeout(safetySpinnerTimeout);
+        setIsLoading(false);
       }
     },
     [processImageSourceToData, slotA, morphValue]

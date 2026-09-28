@@ -57,16 +57,20 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
 
   const handleTriggerUpload = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (pluginBridge.isNativeEnvironment()) {
-      const res = await pluginBridge.openImageFileChooser(targetSlot);
-      if (res && res.dataUrl) {
-        if (targetSlot === 'B') {
-          onUploadSlotB(res.dataUrl, res.fileName);
-        } else {
-          onUploadSlotA(res.dataUrl, res.fileName);
+    try {
+      if (pluginBridge.isNativeEnvironment()) {
+        const res = await pluginBridge.openImageFileChooser(targetSlot);
+        if (res && res.dataUrl) {
+          if (targetSlot === 'B') {
+            onUploadSlotB(res.dataUrl, res.fileName);
+          } else {
+            onUploadSlotA(res.dataUrl, res.fileName);
+          }
+          return;
         }
-        return;
       }
+    } catch (err) {
+      console.warn('Native file chooser error:', err);
     }
     fileInputRef.current?.click();
   };

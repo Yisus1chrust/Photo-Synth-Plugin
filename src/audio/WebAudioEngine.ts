@@ -164,12 +164,23 @@ export class WebAudioEngine {
   public async initAudio(): Promise<void> {
     if (this.isInitialized && this.ctx && this.ctx.state === 'running') return;
 
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.ctx = new AudioCtx();
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+      if (!this.ctx) {
+        this.ctx = new AudioCtx();
+      }
 
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+      if (this.ctx.state === 'suspended') {
+        // Non-blocking resume so it never hangs or locks the UI thread if gestures are deferred
+        this.ctx.resume().catch(() => {});
+      }
+    } catch (err) {
+      console.warn('AudioContext init warning (native environment active):', err);
+      return;
     }
+
+    if (this.isInitialized) return;
 
     // 1. Analyser Node
     this.analyser = this.ctx.createAnalyser();
@@ -367,8 +378,9 @@ export class WebAudioEngine {
 
   private createReverbImpulse(duration: number, decay: number): AudioBuffer {
     if (!this.ctx) throw new Error('AudioContext missing');
-    const sampleRate = this.ctx.sampleRate;
-    const length = sampleRate * duration;
+    const sampleRate = Math.min(48000, this.ctx.sampleRate || 44100);
+    const safeDuration = Math.max(0.1, Math.min(2.0, duration));
+    const length = Math.floor(sampleRate * safeDuration);
     const impulse = this.ctx.createBuffer(2, length, sampleRate);
     const left = impulse.getChannelData(0);
     const right = impulse.getChannelData(1);

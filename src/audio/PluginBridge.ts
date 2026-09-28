@@ -340,19 +340,13 @@ class HybridPluginBridge {
     }
 
     if (this.isConnectedToNative && this.nativeFunctions.has('syncPatch')) {
-      this.nativeFunctions.get('syncPatch')!(paramMap).catch(() => {
-        for (const [key, val] of Object.entries(paramMap)) {
-          this.setParameter(key, val);
-        }
-      });
-    } else {
-      for (const [key, val] of Object.entries(paramMap)) {
-        this.setParameter(key, val);
-      }
+      this.nativeFunctions.get('syncPatch')!(paramMap).catch(() => {});
     }
 
-    // Keep web audio in sync
-    globalAudioEngine.updateParameters(patch);
+    // Keep web audio in sync only if running in web browser fallback
+    if (!this.isConnectedToNative) {
+      globalAudioEngine.updateParameters(patch);
+    }
   }
 
   /**

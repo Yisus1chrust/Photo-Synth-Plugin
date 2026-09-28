@@ -719,7 +719,6 @@ export default function App() {
       if (!audioStarted) {
         handleStartAudio();
       }
-      globalAudioEngine.noteOn(note, velocity);
       pluginBridge.noteOn(note, velocity);
       setActiveNotes((prev) => {
         const next = new Set(prev);
@@ -731,7 +730,6 @@ export default function App() {
   );
 
   const handleNoteOff = useCallback((note: number) => {
-    globalAudioEngine.noteOff(note);
     pluginBridge.noteOff(note);
     setActiveNotes((prev) => {
       if (!prev.has(note)) return prev;

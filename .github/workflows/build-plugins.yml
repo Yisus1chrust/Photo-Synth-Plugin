@@ -13,8 +13,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-web-ui:
+    name: Build 1:1 Web UI Bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Web UI
+        run: |
+          npm install
+          npm run build
+
+      - name: Upload Web UI Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-ui-dist
+          path: dist
+          retention-days: 1
+
   build:
     name: Build on ${{ matrix.name }}
+    needs: build-web-ui
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -44,15 +69,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Node.js (Web UI Engine)
-        uses: actions/setup-node@v4
+      - name: Download Web UI Bundle
+        uses: actions/download-artifact@v4
         with:
-          node-version: 20
-
-      - name: Build 100% 1:1 Offline Web UI Bundle
-        run: |
-          npm install
-          npm run build
+          name: web-ui-dist
+          path: dist
 
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'

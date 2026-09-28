@@ -80,11 +80,11 @@ export class WebAudioEngine {
     this.masterGain.gain.value = 0.5;
 
     this.limiter = this.ctx.createDynamicsCompressor();
-    this.limiter.threshold.value = -3.0; // dB
-    this.limiter.knee.value = 2.0;       // Smooth soft knee
-    this.limiter.ratio.value = 20.0;     // Lookahead brickwall limiter ratio
-    this.limiter.attack.value = 0.0005;  // 0.5ms ultra-fast attack
-    this.limiter.release.value = 0.08;   // 80ms fast recovery
+    this.limiter.threshold.value = -1.0; // dB
+    this.limiter.knee.value = 12.0;      // Smooth soft musical knee
+    this.limiter.ratio.value = 4.0;      // Gentle transparent compression
+    this.limiter.attack.value = 0.01;    // 10ms smooth transparent attack
+    this.limiter.release.value = 0.15;   // 150ms smooth recovery
 
     this.masterSoftClipper = this.ctx.createWaveShaper();
     this.masterSoftClipper.curve = this.makeMasterSoftClipCurve() as unknown as Float32Array<ArrayBuffer>;
@@ -166,42 +166,25 @@ export class WebAudioEngine {
     this.globalLfo.connect(this.globalLfoGain);
     this.globalLfo.start();
 
-    // DC-Blocking Filter: y[n] = x[n] - x[n-1] + 0.995 * y[n-1]
-    const feedforward = [1, -1];
-    const feedback = [1, -0.995];
-    if (this.ctx.createIIRFilter) {
-      this.dcBlockerNode = this.ctx.createIIRFilter(feedforward, feedback);
-    }
+    // Highpass DC-Blocking Filter (eliminates subsonic DC pops and kick thumps below 25Hz)
+    const masterDcBlocker = this.ctx.createBiquadFilter();
+    masterDcBlocker.type = 'highpass';
+    masterDcBlocker.frequency.value = 25.0;
+    masterDcBlocker.Q.value = 0.707;
 
     // Signal Routing Chain:
-    // Voices -> MasterGain -> DCBlocker -> Parallel Body Cavity Resonators / Tape Flutter -> Analog Saturation -> (Limiter/FX) -> MasterSoftClipper -> Analyser -> Destination
-    if (this.dcBlockerNode) {
-      this.masterGain.connect(this.dcBlockerNode);
+    // Voices -> MasterGain -> MasterDCBlocker -> (Dry bus + FX Sends) -> Limiter -> MasterSoftClipper -> Analyser -> Destination
+    this.masterGain.connect(masterDcBlocker);
 
-      this.dcBlockerNode.connect(this.tapeFlutterDelay);
-      this.dcBlockerNode.connect(this.bodyFilter1);
-      this.dcBlockerNode.connect(this.bodyFilter2);
-      this.dcBlockerNode.connect(this.bodyFilter3);
-    } else {
-      this.masterGain.connect(this.tapeFlutterDelay);
-      this.masterGain.connect(this.bodyFilter1);
-      this.masterGain.connect(this.bodyFilter2);
-      this.masterGain.connect(this.bodyFilter3);
-    }
+    // Dry path to limiter
+    masterDcBlocker.connect(this.limiter);
 
-    this.bodyFilter1.connect(this.bodyMixGain);
-    this.bodyFilter2.connect(this.bodyMixGain);
-    this.bodyFilter3.connect(this.bodyMixGain);
-    this.bodyMixGain.connect(this.tapeFlutterDelay);
+    // FX Sends
+    masterDcBlocker.connect(this.delayNode);
+    masterDcBlocker.connect(this.reverbNode);
 
-    this.tapeFlutterDelay.connect(this.saturationShaper);
-
-    this.saturationShaper.connect(this.limiter);
-    this.saturationShaper.connect(this.delayNode);
-    this.saturationShaper.connect(this.reverbNode);
-
+    // FX Returns
     this.delayMixGain.connect(this.limiter);
-    this.reverbNode.connect(this.reverbMixGain);
     this.reverbMixGain.connect(this.limiter);
 
     // Stereo Soundstage Panner Node
@@ -209,16 +192,6 @@ export class WebAudioEngine {
       this.pannerNode = this.ctx.createStereoPanner();
       this.pannerNode.pan.value = 0.0;
     }
-
-    // Ring Modulation / Harmonic Tension Generator
-    this.ringModOsc = this.ctx.createOscillator();
-    this.ringModOsc.type = 'sine';
-    this.ringModOsc.frequency.value = 180;
-    this.ringModGain = this.ctx.createGain();
-    this.ringModGain.gain.value = 0.0;
-    this.ringModOsc.connect(this.ringModGain);
-    this.ringModGain.connect(this.masterGain);
-    this.ringModOsc.start();
 
     if (this.pannerNode) {
       this.limiter.connect(this.pannerNode);
@@ -354,12 +327,12 @@ export class WebAudioEngine {
 
     // Limiter toggle & threshold
     if (this.limiter) {
-      const threshDb = Math.max(-30.0, Math.min(0.0, typeof params.threshold === 'number' && !isNaN(params.threshold) ? params.threshold : -3.0));
+      const threshDb = Math.max(-18.0, Math.min(0.0, typeof params.threshold === 'number' && !isNaN(params.threshold) ? params.threshold : -1.0));
       const targetThreshold = params.limiterEnabled ? threshDb : -0.5;
       this.limiter.threshold.setTargetAtTime(targetThreshold, now, 0.02);
-      this.limiter.ratio.setTargetAtTime(params.limiterEnabled ? 20.0 : 12.0, now, 0.02);
-      this.limiter.attack.setTargetAtTime(0.001, now, 0.02);
-      this.limiter.release.setTargetAtTime(0.05, now, 0.02);
+      this.limiter.ratio.setTargetAtTime(params.limiterEnabled ? 4.0 : 2.0, now, 0.02);
+      this.limiter.attack.setTargetAtTime(0.01, now, 0.02);
+      this.limiter.release.setTargetAtTime(0.15, now, 0.02);
     }
 
     // LFO Rate & Depth
@@ -573,19 +546,19 @@ export class WebAudioEngine {
     });
   }
 
-  private killVoiceImmediately(voice: PolyVoice, fadeSec = 0.002): void {
+  private killVoiceImmediately(voice: PolyVoice, fadeSec = 0.008): void {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     try {
       voice.ampGain.gain.cancelScheduledValues(now);
       const currentVal = voice.ampGain.gain.value;
       voice.ampGain.gain.setValueAtTime(Math.max(0.0001, currentVal), now);
-      voice.ampGain.gain.linearRampToValueAtTime(0.00001, now + fadeSec);
+      voice.ampGain.gain.linearRampToValueAtTime(0.0, now + fadeSec);
     } catch {
       // ignore scheduling errors if already inactive
     }
 
-    const cleanupDelayMs = Math.ceil((fadeSec + 0.003) * 1000);
+    const cleanupDelayMs = Math.ceil((fadeSec + 0.005) * 1000);
     setTimeout(() => {
       this.cleanupVoiceNodes(voice);
     }, cleanupDelayMs);
@@ -611,17 +584,17 @@ export class WebAudioEngine {
       this.ctx.resume();
     }
 
-    // 1. Immediate Voice Retriggering & Fast Voice Stealing (2ms crossfade)
+    // 1. Immediate Voice Retriggering & Fast Voice Stealing (8ms crossfade)
     if (this.activeVoices.has(midiNote)) {
       const activeVoice = this.activeVoices.get(midiNote)!;
-      this.killVoiceImmediately(activeVoice, 0.002);
+      this.killVoiceImmediately(activeVoice, 0.008);
       this.activeVoices.delete(midiNote);
     }
 
     // Instantly kill any fading release tails for this note so rapid inputs do not smear
     this.fadingVoices.forEach((v) => {
       if (v.note === midiNote) {
-        this.killVoiceImmediately(v, 0.002);
+        this.killVoiceImmediately(v, 0.008);
         this.fadingVoices.delete(v);
       }
     });
@@ -638,7 +611,7 @@ export class WebAudioEngine {
       });
       if (oldestNote !== null) {
         const oldestVoice = this.activeVoices.get(oldestNote)!;
-        this.killVoiceImmediately(oldestVoice, 0.002);
+        this.killVoiceImmediately(oldestVoice, 0.008);
         this.activeVoices.delete(oldestNote);
       }
     }
@@ -654,7 +627,7 @@ export class WebAudioEngine {
         }
       });
       if (oldestFading) {
-        this.killVoiceImmediately(oldestFading, 0.002);
+        this.killVoiceImmediately(oldestFading, 0.008);
         this.fadingVoices.delete(oldestFading);
       }
     }
@@ -686,18 +659,18 @@ export class WebAudioEngine {
     const unisonScale = 1.0 / Math.sqrt(Math.max(1, params.unisonVoices || 1));
     const peakAmp = Math.min(0.45, Math.max(0.10, velocity * 0.35 * unisonScale * polyphonicScale * engineGainBoost));
 
-    // ADSR Envelope: 5ms smooth attack floor prevents DC clicks and kick-like transients
-    const microAttackFloor = 0.005;
-    const safeAttack = Math.max(microAttackFloor, Math.min(5.0, params.attackTime || 0.01));
-    const safeDecay = Math.max(0.01, Math.min(10.0, params.decayTime || 0.8));
+    // ADSR Envelope: 12ms smooth de-clicked attack floor prevents waveform step discontinuities
+    const microAttackFloor = 0.012;
+    const safeAttack = Math.max(microAttackFloor, Math.min(5.0, params.attackTime || 0.025));
+    const safeDecay = Math.max(0.02, Math.min(10.0, params.decayTime || 0.8));
     const safeSustain = Math.max(0.35, Math.min(1.0, params.sustainLevel ?? 0.7));
 
-    const attackEnd = now + safeAttack;
-    ampGain.gain.setValueAtTime(0.0001, now);
-    ampGain.gain.exponentialRampToValueAtTime(peakAmp, attackEnd);
+    // Smooth onset ramp starting at precise t=now: zero amplitude at start, ramping to peakAmp
+    ampGain.gain.setValueAtTime(0.0, now);
+    ampGain.gain.linearRampToValueAtTime(peakAmp, now + safeAttack);
     ampGain.gain.setTargetAtTime(
       peakAmp * safeSustain,
-      attackEnd,
+      now + safeAttack,
       safeDecay
     );
 
@@ -740,7 +713,7 @@ export class WebAudioEngine {
       subOsc.frequency.setValueAtTime(freq / 2, now);
 
       const subGain = this.ctx.createGain();
-      subGain.gain.value = (params.subOscLevel || 0.4) * 0.7;
+      subGain.gain.value = (params.subOscLevel || 0.25) * 0.35;
       subOsc.connect(subGain);
       subGain.connect(filter);
       subOsc.start(now);
@@ -761,20 +734,16 @@ export class WebAudioEngine {
 
       subOsc = this.ctx.createOscillator();
       subOsc.type = 'sawtooth';
-      subOsc.frequency.setValueAtTime(freq * 1.008, now);
+      subOsc.frequency.setValueAtTime(freq * 1.004, now);
 
       const subGain = this.ctx.createGain();
-      subGain.gain.value = 0.5;
+      subGain.gain.value = (params.subOscLevel || 0.25) * 0.35;
       subOsc.connect(subGain);
 
-      shaperNode = this.ctx.createWaveShaper();
-      shaperNode.curve = this.makeDistortionCurve(30 + (params.fmAmount || 0.3) * 50) as unknown as Float32Array<ArrayBuffer>;
-      shaperNode.oversample = '4x';
-
-      osc1.connect(shaperNode);
-      osc2.connect(shaperNode);
-      subGain.connect(shaperNode);
-      shaperNode.connect(filter);
+      // Clean signal path straight to resonant filter for lush analog brass
+      osc1.connect(filter);
+      osc2.connect(filter);
+      subGain.connect(filter);
 
       subOsc.start(now);
 
@@ -793,11 +762,11 @@ export class WebAudioEngine {
       fmModulator.frequency.setValueAtTime(freq * (params.fmRatio || 3.0), now);
 
       fmGain = this.ctx.createGain();
-      const fmModDepth = freq * (params.fmAmount || 0.4) * 5.0;
-      const fmRamp = 0.003;
+      const fmModDepth = freq * (params.fmAmount || 0.3) * 1.5;
+      const fmRamp = 0.008;
       fmGain.gain.setValueAtTime(0, now);
       fmGain.gain.linearRampToValueAtTime(fmModDepth, now + fmRamp);
-      fmGain.gain.exponentialRampToValueAtTime(0.001, now + fmRamp + Math.max(0.05, params.decayTime * 0.8));
+      fmGain.gain.exponentialRampToValueAtTime(0.001, now + fmRamp + Math.max(0.08, params.decayTime * 0.8));
 
       fmModulator.connect(fmGain);
       fmGain.connect(osc1.frequency);
@@ -807,7 +776,7 @@ export class WebAudioEngine {
       subOsc.type = 'square';
       subOsc.frequency.setValueAtTime(freq / 2, now);
       const subGain = this.ctx.createGain();
-      subGain.gain.value = (params.subOscLevel || 0.3) * 0.5;
+      subGain.gain.value = (params.subOscLevel || 0.2) * 0.3;
       subOsc.connect(subGain);
       subGain.connect(filter);
       subOsc.start(now);
@@ -829,7 +798,7 @@ export class WebAudioEngine {
       subOsc.type = 'square';
       subOsc.frequency.setValueAtTime(freq / 2, now);
       const subGain = this.ctx.createGain();
-      subGain.gain.value = params.subOscLevel;
+      subGain.gain.value = (params.subOscLevel || 0.25) * 0.35;
       subOsc.connect(subGain);
       subGain.connect(filter);
       subOsc.start(now);

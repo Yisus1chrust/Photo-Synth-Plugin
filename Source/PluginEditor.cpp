@@ -36,7 +36,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         .withNativeFunction("setParameter", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 2) {
                 juce::String paramId = args[0].toString();
-                float value = (float)(double)args[1];
+                float value = static_cast<float>(args[1].operator double());
 
                 if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
                     param->setValueNotifyingHost(param->convertTo0to1(value));
@@ -47,8 +47,8 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         // 2. noteOn native function
         .withNativeFunction("noteOn", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)(int64_t)args[0];
-                float vel = args.size() > 1 ? (float)(double)args[1] : 0.85f;
+                int note = args[0].operator int();
+                float vel = args.size() > 1 ? static_cast<float>(args[1].operator double()) : 0.85f;
                 audioProcessor.noteOn(note, vel);
             }
             completion(juce::var());
@@ -56,7 +56,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         // 3. noteOff native function
         .withNativeFunction("noteOff", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)(int64_t)args[0];
+                int note = args[0].operator int();
                 audioProcessor.noteOff(note);
             }
             completion(juce::var());
@@ -64,7 +64,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         // 4. setBpm native function
         .withNativeFunction("setBpm", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                float bpm = (float)(double)args[0];
+                float bpm = static_cast<float>(args[0].operator double());
                 audioProcessor.setBpm(bpm);
             }
             completion(juce::var());

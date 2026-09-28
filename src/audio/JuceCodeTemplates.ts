@@ -26,8 +26,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-web-ui:
+    name: Build 1:1 Web UI Bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Web UI
+        run: |
+          npm install
+          npm run build
+
+      - name: Upload Web UI Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-ui-dist
+          path: dist
+          retention-days: 1
+
   build:
     name: Build on \${{ matrix.name }}
+    needs: build-web-ui
     runs-on: \${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -57,15 +82,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Node.js (Web UI Engine)
-        uses: actions/setup-node@v4
+      - name: Download Web UI Bundle
+        uses: actions/download-artifact@v4
         with:
-          node-version: 20
-
-      - name: Build 100% 1:1 Offline Web UI Bundle
-        run: |
-          npm install
-          npm run build
+          name: web-ui-dist
+          path: dist
 
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'
@@ -311,7 +332,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         .withNativeFunction("setParameter", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 2) {
                 juce::String paramId = args[0].toString();
-                float value = (float)(double)args[1];
+                float value = static_cast<float>(args[1].operator double());
                 if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
                     param->setValueNotifyingHost(param->convertTo0to1(value));
                 }
@@ -320,22 +341,22 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
         })
         .withNativeFunction("noteOn", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)(int64_t)args[0];
-                float vel = args.size() > 1 ? (float)(double)args[1] : 0.85f;
+                int note = args[0].operator int();
+                float vel = args.size() > 1 ? static_cast<float>(args[1].operator double()) : 0.85f;
                 audioProcessor.noteOn(note, vel);
             }
             completion(juce::var());
         })
         .withNativeFunction("noteOff", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                int note = (int)(int64_t)args[0];
+                int note = args[0].operator int();
                 audioProcessor.noteOff(note);
             }
             completion(juce::var());
         })
         .withNativeFunction("setBpm", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             if (args.size() >= 1) {
-                float bpm = (float)(double)args[0];
+                float bpm = static_cast<float>(args[0].operator double());
                 audioProcessor.setBpm(bpm);
             }
             completion(juce::var());

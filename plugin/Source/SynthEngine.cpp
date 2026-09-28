@@ -30,16 +30,16 @@ void SynthVoice::updatePatch(const VoiceParams& params)
 {
     currentParams = params;
 
-    // ADSR settings
+    // ADSR settings: 12ms attack floor prevents waveform step clicks
     juce::ADSR::Parameters ampParams;
-    ampParams.attack  = juce::jmax(0.002f, params.attack);
-    ampParams.decay   = juce::jmax(0.01f, params.decay);
+    ampParams.attack  = juce::jmax(0.012f, params.attack);
+    ampParams.decay   = juce::jmax(0.02f, params.decay);
     ampParams.sustain = juce::jlimit(0.05f, 1.0f, params.sustain);
     ampParams.release = juce::jmax(0.02f, params.release);
     ampEnv.setParameters(ampParams);
 
     juce::ADSR::Parameters fParams;
-    fParams.attack  = juce::jmax(0.005f, params.attack * 0.8f);
+    fParams.attack  = juce::jmax(0.012f, params.attack * 0.8f);
     fParams.decay   = juce::jmax(0.02f, params.decay * 1.2f);
     fParams.sustain = 0.5f;
     fParams.release = juce::jmax(0.02f, params.release * 0.8f);

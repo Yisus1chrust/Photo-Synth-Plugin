@@ -85,39 +85,102 @@ class HybridPluginBridge {
   }
 
   /**
+   * Universal invoker for JUCE 8 Native Functions across all platforms.
+   */
+  public async callNative(name: string, ...args: any[]): Promise<any> {
+    if (typeof window === 'undefined') return undefined;
+
+    // 1. Cached function from getNativeFunction
+    if (this.nativeFunctions.has(name)) {
+      try {
+        return await this.nativeFunctions.get(name)!(...args);
+      } catch (err) {
+        console.warn(`callNative(${name}) cached error:`, err);
+      }
+    }
+
+    // 2. Dynamic lookup from window.__JUCE__.backend or window.Juce
+    const juceBackend = (window as any).__JUCE__?.backend || (window as any).Juce?.backend;
+    const juceRoot = (window as any).__JUCE__ || (window as any).Juce;
+
+    const getNativeFn =
+      (juceBackend && typeof juceBackend.getNativeFunction === 'function' && juceBackend.getNativeFunction.bind(juceBackend)) ||
+      (juceRoot && typeof juceRoot.getNativeFunction === 'function' && juceRoot.getNativeFunction.bind(juceRoot));
+
+    if (getNativeFn) {
+      try {
+        const fn = getNativeFn(name);
+        if (typeof fn === 'function') {
+          this.nativeFunctions.set(name, fn);
+          return await fn(...args);
+        }
+      } catch (err) {
+        console.warn(`callNative(${name}) getNativeFunction error:`, err);
+      }
+    }
+
+    // 3. Direct method on juceBackend
+    if (juceBackend && typeof juceBackend[name] === 'function') {
+      try {
+        return await juceBackend[name](...args);
+      } catch (err) {
+        console.warn(`callNative(${name}) direct backend method error:`, err);
+      }
+    }
+
+    // 4. Custom bridge window.PhotoSynthNative
+    const customNative = (window as any).PhotoSynthNative;
+    if (customNative && typeof customNative[name] === 'function') {
+      try {
+        return await customNative[name](...args);
+      } catch (err) {
+        console.warn(`callNative(${name}) customNative error:`, err);
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
    * Initialize native function bindings if running in JUCE 8 WebView.
    */
   public async initNativeBridge(): Promise<void> {
-    if (!this.detectEnvironment()) return;
+    this.detectEnvironment();
 
     try {
-      const juceApi = window.Juce || window.__JUCE__;
-      if (juceApi?.getNativeFunction) {
-        const fnNames = [
-          'setParameter',
-          'syncPatch',
-          'openFileChooser',
-          'noteOn',
-          'noteOff',
-          'setBpm',
-          'savePreset',
-          'loadPreset',
-          'getWaveformData',
-          'getInitialState',
-        ];
+      const fnNames = [
+        'setParameter',
+        'syncPatch',
+        'openFileChooser',
+        'noteOn',
+        'noteOff',
+        'setBpm',
+        'savePreset',
+        'loadPreset',
+        'getWaveformData',
+        'getInitialState',
+      ];
+
+      const juceBackend = (window as any).__JUCE__?.backend || (window as any).Juce?.backend;
+      const juceRoot = (window as any).__JUCE__ || (window as any).Juce;
+      const getNativeFn =
+        (juceBackend && typeof juceBackend.getNativeFunction === 'function' && juceBackend.getNativeFunction.bind(juceBackend)) ||
+        (juceRoot && typeof juceRoot.getNativeFunction === 'function' && juceRoot.getNativeFunction.bind(juceRoot));
+
+      if (getNativeFn) {
         for (const name of fnNames) {
           try {
-            const fn = juceApi.getNativeFunction(name);
-            if (fn) this.nativeFunctions.set(name, fn);
-          } catch {
-            // Function may not be registered in current build
-          }
+            const fn = getNativeFn(name);
+            if (typeof fn === 'function') {
+              this.nativeFunctions.set(name, fn);
+            }
+          } catch {}
         }
       }
 
       // If JUCE backend event bus is present
-      if (window.__JUCE__?.backend) {
-        window.__JUCE__.backend.addEventListener('waveform', (data: any) => {
+      if (juceBackend && typeof juceBackend.addEventListener === 'function') {
+        juceBackend.addEventListener('waveform', (data: any) => {
           if (Array.isArray(data)) {
             const f32 = new Float32Array(data);
             this.lastWaveform = f32;
@@ -125,20 +188,17 @@ class HybridPluginBridge {
           }
         });
 
-        window.__JUCE__.backend.addEventListener('parameterChanged', (data: any) => {
+        juceBackend.addEventListener('parameterChanged', (data: any) => {
           if (data && typeof data.id === 'string' && typeof data.value === 'number') {
             this.parameterListeners.forEach((fn) => fn(data.id, data.value));
           }
         });
 
-        window.__JUCE__.backend.addEventListener('bpmChanged', (data: any) => {
+        juceBackend.addEventListener('bpmChanged', (data: any) => {
           if (data && typeof data.bpm === 'number') {
             this.bpmListeners.forEach((fn) => fn(data.bpm));
           }
         });
-
-        // Request initial processor state from C++
-        window.__JUCE__.backend.emit('requestInitialState');
       }
     } catch (err) {
       console.warn('Native bridge setup note:', err);
@@ -186,13 +246,7 @@ class HybridPluginBridge {
                           paramId === 'limiterEnabled' ? 'limiter' : paramId;
 
     if (this.isConnectedToNative) {
-      if (this.nativeFunctions.has('setParameter')) {
-        this.nativeFunctions.get('setParameter')!(nativeParamId, value).catch(() => {});
-      } else if (window.PhotoSynthNative?.setParameter) {
-        window.PhotoSynthNative.setParameter(nativeParamId, value);
-      } else if (window.__JUCE__?.backend?.emit) {
-        window.__JUCE__.backend.emit('setParameter', { id: nativeParamId, value });
-      }
+      this.callNative('setParameter', nativeParamId, value);
     }
 
     // 2. Always keep web engine in sync as well
@@ -212,9 +266,9 @@ class HybridPluginBridge {
    * Request native OS file chooser to open an image (PNG/JPG/WebP) in VST/AU.
    */
   public async openImageFileChooser(slot: 'A' | 'B'): Promise<{ dataUrl: string; fileName: string } | null> {
-    if (this.isConnectedToNative && this.nativeFunctions.has('openFileChooser')) {
+    if (this.isConnectedToNative) {
       try {
-        const res = await this.nativeFunctions.get('openFileChooser')!(slot);
+        const res = await this.callNative('openFileChooser', slot);
         if (res && typeof res === 'object' && res.dataUrl) {
           return { dataUrl: res.dataUrl, fileName: res.fileName || `Image ${slot}` };
         }
@@ -230,13 +284,7 @@ class HybridPluginBridge {
    */
   public noteOn(midiNote: number, velocity: number = 0.85): void {
     if (this.isConnectedToNative) {
-      if (this.nativeFunctions.has('noteOn')) {
-        this.nativeFunctions.get('noteOn')!(midiNote, velocity).catch(() => {});
-      } else if (window.PhotoSynthNative?.noteOn) {
-        window.PhotoSynthNative.noteOn(midiNote, velocity);
-      } else if (window.__JUCE__?.backend?.emit) {
-        window.__JUCE__.backend.emit('noteOn', { note: midiNote, velocity });
-      }
+      this.callNative('noteOn', midiNote, velocity);
     }
 
     // Always trigger web audio fallback
@@ -248,13 +296,7 @@ class HybridPluginBridge {
    */
   public noteOff(midiNote: number): void {
     if (this.isConnectedToNative) {
-      if (this.nativeFunctions.has('noteOff')) {
-        this.nativeFunctions.get('noteOff')!(midiNote).catch(() => {});
-      } else if (window.PhotoSynthNative?.noteOff) {
-        window.PhotoSynthNative.noteOff(midiNote);
-      } else if (window.__JUCE__?.backend?.emit) {
-        window.__JUCE__.backend.emit('noteOff', { note: midiNote });
-      }
+      this.callNative('noteOff', midiNote);
     }
 
     // Web audio fallback

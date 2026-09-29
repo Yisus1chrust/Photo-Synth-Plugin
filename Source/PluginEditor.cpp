@@ -102,18 +102,42 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                         else if (ext == ".gif") mime = "image/gif";
 
                         auto img = juce::ImageFileFormat::loadFrom(resultFile);
+                        juce::String dataUrl;
                         if (img.isValid()) {
+                            // Downscale thumbnail for WebView to max 512px so IPC transfer is light (<50KB)
+                            juce::Image thumb = img;
+                            const int maxDim = 512;
+                            if (thumb.getWidth() > maxDim || thumb.getHeight() > maxDim) {
+                                int tw = thumb.getWidth();
+                                int th = thumb.getHeight();
+                                if (tw > th) {
+                                    th = std::max(1, (th * maxDim) / tw);
+                                    tw = maxDim;
+                                } else {
+                                    tw = std::max(1, (tw * maxDim) / th);
+                                    th = maxDim;
+                                }
+                                thumb = thumb.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
+                            }
+                            juce::MemoryOutputStream mos;
+                            juce::JPEGImageFormat jpeg;
+                            jpeg.writeImageToStream(thumb, mos);
+                            juce::String b64Thumb = juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+                            dataUrl = "data:image/jpeg;base64," + b64Thumb;
+
                             if (slot == "B") {
                                 audioProcessor.loadSlotBImage(img, resultFile.getFileNameWithoutExtension());
                             } else {
                                 audioProcessor.loadSlotAImage(img, resultFile.getFileNameWithoutExtension());
                             }
+                        } else {
+                            dataUrl = "data:" + mime + ";base64," + b64;
                         }
 
                         juce::DynamicObject::Ptr resObj = new juce::DynamicObject();
                         resObj->setProperty("slot", slot);
                         resObj->setProperty("fileName", resultFile.getFileName());
-                        resObj->setProperty("dataUrl", "data:" + mime + ";base64," + b64);
+                        resObj->setProperty("dataUrl", dataUrl);
                         completion(juce::var(resObj.get()));
                         return;
                     }

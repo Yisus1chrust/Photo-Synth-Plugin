@@ -709,10 +709,15 @@ export class WebAudioEngine {
   }
 
   public noteOn(midiNote: number, velocity = 0.8): void {
-    if (!this.isInitialized || !this.ctx) return;
+    if (!this.isInitialized || !this.ctx) {
+      this.initAudio().then(() => {
+        this.noteOn(midiNote, velocity);
+      }).catch(() => {});
+      return;
+    }
 
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
 
     // 1. Immediate Voice Retriggering & Fast Voice Stealing (8ms crossfade)

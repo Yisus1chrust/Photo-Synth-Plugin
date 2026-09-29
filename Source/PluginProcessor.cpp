@@ -409,7 +409,7 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     // Apply master volume gain
     float volDb = *apvts.getRawParameterValue("volume");
-    float masterGain = juce::Decibels::decibelsToGain(volDb, -60.0f) * 0.5f;
+    float masterGain = juce::Decibels::decibelsToGain(volDb, -60.0f) * 0.95f;
     buffer.applyGain(masterGain);
 
     // Apply Limiter

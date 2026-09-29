@@ -161,20 +161,30 @@ export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
 
           if (isBlackKey) {
             return (
-              <div
+              <button
+                type="button"
                 key={midiNote}
-                onMouseDown={() => handleKeyNoteOn(midiNote, 0.9)}
-                onMouseUp={() => handleKeyNoteOff(midiNote)}
-                onMouseLeave={() => isActive && handleKeyNoteOff(midiNote)}
-                onTouchStart={(e) => {
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleKeyNoteOn(midiNote, 0.9);
+                }}
+                onPointerUp={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleKeyNoteOff(midiNote);
+                }}
+                onPointerLeave={() => isActive && handleKeyNoteOff(midiNote)}
+                onPointerCancel={() => isActive && handleKeyNoteOff(midiNote)}
+                onMouseDown={(e) => {
                   e.preventDefault();
                   handleKeyNoteOn(midiNote, 0.9);
                 }}
-                onTouchEnd={(e) => {
+                onMouseUp={(e) => {
                   e.preventDefault();
                   handleKeyNoteOff(midiNote);
                 }}
-                className={`relative -mx-1.5 sm:-mx-2 z-20 w-3.5 sm:w-4.5 h-8 sm:h-10 rounded-b border cursor-pointer transition-all shadow-md ${
+                className={`relative -mx-1.5 sm:-mx-2 z-20 w-3.5 sm:w-4.5 h-8 sm:h-10 rounded-b border cursor-pointer pointer-events-auto touch-none transition-all shadow-md ${
                   isActive
                     ? 'bg-blue-500 border-cyan-200 shadow-[0_0_16px_#00d2ff] scale-[0.97]'
                     : 'bg-gradient-to-b from-[#242b38] via-[#121622] to-[#080b12] border-[#0a0d14] hover:from-[#323c4e] hover:to-[#0f1420]'
@@ -184,20 +194,30 @@ export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
           }
 
           return (
-            <div
+            <button
+              type="button"
               key={midiNote}
-              onMouseDown={() => handleKeyNoteOn(midiNote, 0.9)}
-              onMouseUp={() => handleKeyNoteOff(midiNote)}
-              onMouseLeave={() => isActive && handleKeyNoteOff(midiNote)}
-              onTouchStart={(e) => {
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleKeyNoteOn(midiNote, 0.9);
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleKeyNoteOff(midiNote);
+              }}
+              onPointerLeave={() => isActive && handleKeyNoteOff(midiNote)}
+              onPointerCancel={() => isActive && handleKeyNoteOff(midiNote)}
+              onMouseDown={(e) => {
                 e.preventDefault();
                 handleKeyNoteOn(midiNote, 0.9);
               }}
-              onTouchEnd={(e) => {
+              onMouseUp={(e) => {
                 e.preventDefault();
                 handleKeyNoteOff(midiNote);
               }}
-              className={`z-10 flex-1 min-w-[8px] sm:min-w-[12px] h-full rounded-b border cursor-pointer transition-all flex flex-col justify-end p-0.5 text-[8px] font-bold ${
+              className={`z-10 flex-1 min-w-[8px] sm:min-w-[12px] h-full rounded-b border cursor-pointer pointer-events-auto touch-none transition-all flex flex-col justify-end p-0.5 text-[8px] font-bold ${
                 isActive
                   ? 'bg-gradient-to-b from-cyan-400 via-blue-500 to-blue-600 border-cyan-100 shadow-[0_0_20px_#00d2ff] text-white scale-[0.98]'
                   : 'bg-gradient-to-b from-[#f1f5f9] via-[#e2e8f0] to-[#cbd5e1] border-[#94a3b8]/40 hover:from-white hover:to-[#cbd5e1] text-zinc-600 shadow-[inset_0_-3px_4px_rgba(0,0,0,0.15)]'
@@ -208,7 +228,7 @@ export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
                   C{octaveNum}
                 </span>
               )}
-            </div>
+            </button>
           );
         })}
       </div>

@@ -24,6 +24,21 @@ void SynthVoice::prepare(double sampleRate, int /*samplesPerBlock*/)
     filterEnv.setSampleRate(currentSampleRate);
     filterS1[0] = filterS1[1] = 0.0f;
     filterS2[0] = filterS2[1] = 0.0f;
+
+    // Set immediate playable default ADSR parameters
+    juce::ADSR::Parameters ampParams;
+    ampParams.attack  = 0.015f;
+    ampParams.decay   = 0.35f;
+    ampParams.sustain = 0.80f;
+    ampParams.release = 0.30f;
+    ampEnv.setParameters(ampParams);
+
+    juce::ADSR::Parameters fParams;
+    fParams.attack  = 0.015f;
+    fParams.decay   = 0.40f;
+    fParams.sustain = 0.60f;
+    fParams.release = 0.30f;
+    filterEnv.setParameters(fParams);
 }
 
 void SynthVoice::updatePatch(const VoiceParams& params)
@@ -174,7 +189,7 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         }
 
         // Voice envelope and velocity scaling
-        float voiceGain = envGain * currentVelocity * 0.50f;
+        float voiceGain = envGain * currentVelocity * 0.85f;
         float sampleL = outL * voiceGain;
         float sampleR = outR * voiceGain;
 

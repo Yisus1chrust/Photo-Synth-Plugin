@@ -66,6 +66,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
           } else {
             onUploadSlotA(res.dataUrl, res.fileName);
           }
+          try { window.focus(); } catch {}
           return;
         }
       }
@@ -73,6 +74,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
       console.warn('Native file chooser error:', err);
     }
     fileInputRef.current?.click();
+    setTimeout(() => { try { window.focus(); } catch {} }, 500);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -95,6 +97,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
         } else {
           onUploadSlotA(file, file.name);
         }
+        try { window.focus(); } catch {}
       }
     }
   };
@@ -108,6 +111,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
         onUploadSlotA(file, file.name);
       }
       e.target.value = '';
+      setTimeout(() => { try { window.focus(); } catch {} }, 150);
     }
   };
 

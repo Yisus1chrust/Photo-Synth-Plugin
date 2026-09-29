@@ -284,6 +284,7 @@ export default function App() {
       } finally {
         clearTimeout(safetySpinnerTimeout);
         setIsLoading(false);
+        try { window.focus(); } catch {}
       }
     },
     [processImageSourceToData, slotB, morphValue]
@@ -327,6 +328,7 @@ export default function App() {
       } finally {
         clearTimeout(safetySpinnerTimeout);
         setIsLoading(false);
+        try { window.focus(); } catch {}
       }
     },
     [processImageSourceToData, slotA, morphValue]
@@ -798,7 +800,12 @@ export default function App() {
         return;
       }
       if (!audioStarted) {
-        handleStartAudio();
+        setAudioStarted(true);
+        globalAudioEngine.initAudio().catch(() => {});
+        if (patch) {
+          globalAudioEngine.updateParameters(patch);
+          pluginBridge.syncFullPatch(patch, metrics);
+        }
       }
       pluginBridge.noteOn(note, velocity);
       setActiveNotes((prev) => {
@@ -807,7 +814,7 @@ export default function App() {
         return next;
       });
     },
-    [audioStarted, isLicensed]
+    [audioStarted, isLicensed, patch, metrics]
   );
 
   const handleNoteOff = useCallback((note: number) => {

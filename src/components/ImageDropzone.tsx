@@ -57,6 +57,9 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
 
   const handleTriggerUpload = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
+    if (e?.currentTarget instanceof HTMLElement) {
+      e.currentTarget.blur();
+    }
     try {
       if (pluginBridge.isNativeEnvironment()) {
         const res = await pluginBridge.openImageFileChooser(targetSlot);
@@ -65,6 +68,9 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
             onUploadSlotB(res.dataUrl, res.fileName);
           } else {
             onUploadSlotA(res.dataUrl, res.fileName);
+          }
+          if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
           }
           try { window.focus(); } catch {}
           return;

@@ -131,102 +131,94 @@ export default function App() {
   const processImageSourceToData = useCallback(
     async (source: File | Blob | string, presetTitle?: string) => {
       let previewUrl = '';
-      let objectUrlToRevoke: string | null = null;
 
-      try {
-        if (typeof source === 'object' && source !== null && 'size' in source) {
-          // If File or Blob, create ObjectURL for instantaneous zero-overhead decoding
-          try {
-            previewUrl = URL.createObjectURL(source as Blob);
-            objectUrlToRevoke = previewUrl;
-          } catch {
-            // Fallback to FileReader if objectURL is restricted
-            previewUrl = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result as string);
-              reader.onerror = (e) => reject(e);
-              reader.readAsDataURL(source as Blob);
-            });
-          }
-        } else if (typeof source === 'string') {
-          previewUrl = source;
-        }
-
-        // Decode HTMLImageElement with safety timeout to prevent any thread hang
-        const loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          let settled = false;
-
-          const done = (ok: boolean, err?: any) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeoutId);
-            if (ok && img.naturalWidth > 0) resolve(img);
-            else reject(err || new Error('Image decoding failed'));
-          };
-
-          const timeoutId = setTimeout(() => {
-            if (img.complete && img.naturalWidth > 0) done(true);
-            else done(false, new Error('Image loading timed out'));
-          }, 4000);
-
-          img.onload = () => done(true);
-          img.onerror = (e) => done(false, e);
-          img.crossOrigin = 'anonymous';
-          img.src = previewUrl;
-
-          if (img.complete && img.naturalWidth > 0) {
-            done(true);
-          }
+      if (typeof source === 'object' && source !== null && 'size' in source) {
+        // Read directly as Base64 Data URL so it is 100% immune to WebKit blob CORS issues
+        previewUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = (e) => reject(e);
+          reader.readAsDataURL(source as Blob);
         });
-
-        // Resize down to max 512px for responsive analysis & compact memory footprint
-        let exportDataUrl = previewUrl;
-        try {
-          const canvas = document.createElement('canvas');
-          const maxDim = 512;
-          let w = loadedImg.naturalWidth || loadedImg.width || 300;
-          let h = loadedImg.naturalHeight || loadedImg.height || 300;
-          if (w > maxDim || h > maxDim) {
-            if (w > h) {
-              h = Math.round((h * maxDim) / w);
-              w = maxDim;
-            } else {
-              w = Math.round((w * maxDim) / h);
-              h = maxDim;
-            }
-          }
-          canvas.width = Math.max(1, w);
-          canvas.height = Math.max(1, h);
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(loadedImg, 0, 0, canvas.width, canvas.height);
-            exportDataUrl = canvas.toDataURL('image/jpeg', 0.85);
-          }
-        } catch {
-          // Keep previewUrl if canvas export is restricted
-        }
-
-        // Brief yield to browser event loop to let UI render smoothly
-        await new Promise((r) => setTimeout(r, 20));
-
-        const { metrics: extractedMetrics, baselinePatch: generatedPatch } =
-          await analyzeImage(loadedImg);
-
-        return {
-          dataUrl: exportDataUrl,
-          metrics: extractedMetrics,
-          patch: generatedPatch,
-          title:
-            presetTitle ||
-            (typeof source === 'string' ? 'Preset Image' : (source as File).name || 'Custom Image'),
-        };
-      } finally {
-        if (objectUrlToRevoke) {
-          // Clean up memory after image has been rendered to canvas
-          setTimeout(() => URL.revokeObjectURL(objectUrlToRevoke!), 1000);
-        }
+      } else if (typeof source === 'string') {
+        previewUrl = source;
       }
+
+      // Decode HTMLImageElement with safety timeout to prevent any thread hang
+      const loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        let settled = false;
+
+        const done = (ok: boolean, err?: any) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          if (ok && (img.naturalWidth > 0 || img.width > 0)) resolve(img);
+          else reject(err || new Error('Image decoding failed'));
+        };
+
+        const timeoutId = setTimeout(() => {
+          if (img.complete && (img.naturalWidth > 0 || img.width > 0)) done(true);
+          else done(false, new Error('Image loading timed out'));
+        }, 5000);
+
+        img.onload = () => done(true);
+        img.onerror = (e) => done(false, e);
+
+        // ONLY set crossOrigin on remote HTTP/HTTPS URLs!
+        // NEVER set crossOrigin on Data URLs or Blob URLs or local files!
+        if (typeof previewUrl === 'string' && (previewUrl.startsWith('http://') || previewUrl.startsWith('https://'))) {
+          img.crossOrigin = 'anonymous';
+        }
+
+        img.src = previewUrl;
+
+        if (img.complete && (img.naturalWidth > 0 || img.width > 0)) {
+          done(true);
+        }
+      });
+
+      // Resize down to max 512px for responsive analysis & compact memory footprint
+      let exportDataUrl = previewUrl;
+      try {
+        const canvas = document.createElement('canvas');
+        const maxDim = 512;
+        let w = loadedImg.naturalWidth || loadedImg.width || 300;
+        let h = loadedImg.naturalHeight || loadedImg.height || 300;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(loadedImg, 0, 0, canvas.width, canvas.height);
+          exportDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        }
+      } catch {
+        // Keep previewUrl if canvas export is restricted
+      }
+
+      // Brief yield to browser event loop to let UI render smoothly
+      await new Promise((r) => setTimeout(r, 20));
+
+      const { metrics: extractedMetrics, baselinePatch: generatedPatch } =
+        await analyzeImage(loadedImg);
+
+      return {
+        dataUrl: exportDataUrl,
+        metrics: extractedMetrics,
+        patch: generatedPatch,
+        title:
+          presetTitle ||
+          (typeof source === 'string' ? 'Preset Image' : (source as File).name || 'Custom Image'),
+      };
     },
     []
   );

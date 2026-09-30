@@ -115,7 +115,8 @@ static inline float getBlepSquare(float phase, float inc)
 {
     float naive = (phase < 0.5f) ? 1.0f : -1.0f;
     naive += polyBlep(phase, inc);
-    naive -= polyBlep(std::fmod(phase + 0.5f, 1.0f), inc);
+    float phaseShifted = (phase >= 0.5f) ? (phase - 0.5f) : (phase + 0.5f);
+    naive -= polyBlep(phaseShifted, inc);
     return naive;
 }
 

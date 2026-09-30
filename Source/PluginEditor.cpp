@@ -11,6 +11,7 @@
 #include "LogoBinaryData.h"
 #include <cstddef>
 #include <cstring>
+#include <cmath>
 
 #if JUCE_WEB_BROWSER
 
@@ -87,7 +88,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
                 "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif");
 
-            auto folderFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::useOSNativeDialogBox;
+            auto folderFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
             fileChooser->launchAsync(folderFlags, [this, slot, completion](const juce::FileChooser& fc) {
                 auto resultFile = fc.getResult();

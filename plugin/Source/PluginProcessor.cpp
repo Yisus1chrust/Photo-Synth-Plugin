@@ -304,6 +304,66 @@ juce::Image PhotoSynthAudioProcessor::getBlendedImage()
     return blendedImage;
 }
 
+juce::String PhotoSynthAudioProcessor::getImageSlotAAsDataUrl() const
+{
+    if (!imageSlotA.isValid()) return {};
+    juce::Image thumb = imageSlotA;
+    if (thumb.getWidth() > 512 || thumb.getHeight() > 512) {
+        int tw = thumb.getWidth(), th = thumb.getHeight();
+        if (tw > th) { th = std::max(1, (th * 512) / tw); tw = 512; }
+        else { tw = std::max(1, (tw * 512) / th); th = 512; }
+        thumb = thumb.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
+    }
+    juce::MemoryOutputStream mos;
+    juce::JPEGImageFormat jpeg;
+    jpeg.writeImageToStream(thumb, mos);
+    return "data:image/jpeg;base64," + juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+}
+
+juce::String PhotoSynthAudioProcessor::getImageSlotBAsDataUrl() const
+{
+    if (!imageSlotB.isValid()) return {};
+    juce::Image thumb = imageSlotB;
+    if (thumb.getWidth() > 512 || thumb.getHeight() > 512) {
+        int tw = thumb.getWidth(), th = thumb.getHeight();
+        if (tw > th) { th = std::max(1, (th * 512) / tw); tw = 512; }
+        else { tw = std::max(1, (tw * 512) / th); th = 512; }
+        thumb = thumb.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
+    }
+    juce::MemoryOutputStream mos;
+    juce::JPEGImageFormat jpeg;
+    jpeg.writeImageToStream(thumb, mos);
+    return "data:image/jpeg;base64," + juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+}
+
+void PhotoSynthAudioProcessor::syncSlotImageFromFrontend(const juce::String& slot, const juce::String& dataUrl, const juce::String& name)
+{
+    if (dataUrl.isEmpty()) return;
+
+    juce::String b64 = dataUrl;
+    int commaIdx = b64.indexOfChar(',');
+    if (commaIdx >= 0) {
+        b64 = b64.substring(commaIdx + 1);
+    }
+
+    juce::MemoryOutputStream mos;
+    juce::Base64::convertFromBase64(mos, b64);
+    auto img = juce::ImageFileFormat::loadFrom(mos.getData(), mos.getDataSize());
+    if (img.isValid()) {
+        if (slot.equalsIgnoreCase("B")) {
+            imageSlotB = img;
+            slotBName = name.isNotEmpty() ? name : "Image B";
+            analysisSlotB = ImageAnalyzer::analyzeImage(img);
+        } else {
+            imageSlotA = img;
+            slotAName = name.isNotEmpty() ? name : "Image A";
+            analysisSlotA = ImageAnalyzer::analyzeImage(img);
+        }
+        updateMorphState();
+        updateBlendedImage();
+    }
+}
+
 void PhotoSynthAudioProcessor::noteOn(int midiNoteNumber, float velocity)
 {
     const juce::ScopedLock sl(midiLock);
@@ -409,7 +469,7 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     // Apply master volume gain
     float volDb = *apvts.getRawParameterValue("volume");
-    float masterGain = juce::Decibels::decibelsToGain(volDb, -60.0f) * 0.5f;
+    float masterGain = juce::Decibels::decibelsToGain(volDb, -60.0f) * 0.95f;
     buffer.applyGain(masterGain);
 
     // Apply Limiter
@@ -587,7 +647,41 @@ void PhotoSynthAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
-    copyXmlToBinary (*xml, destData);
+    if (xml != nullptr) {
+        xml->setAttribute("slotAName", slotAName);
+        xml->setAttribute("slotBName", slotBName);
+        xml->setAttribute("currentBpm", (double)currentBpm);
+
+        if (imageSlotA.isValid()) {
+            juce::Image thumbA = imageSlotA;
+            if (thumbA.getWidth() > 512 || thumbA.getHeight() > 512) {
+                int tw = thumbA.getWidth(), th = thumbA.getHeight();
+                if (tw > th) { th = std::max(1, (th * 512) / tw); tw = 512; }
+                else { tw = std::max(1, (tw * 512) / th); th = 512; }
+                thumbA = thumbA.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
+            }
+            juce::MemoryOutputStream mos;
+            juce::JPEGImageFormat jpeg;
+            jpeg.writeImageToStream(thumbA, mos);
+            xml->setAttribute("imageA_b64", juce::Base64::toBase64(mos.getData(), mos.getDataSize()));
+        }
+
+        if (imageSlotB.isValid()) {
+            juce::Image thumbB = imageSlotB;
+            if (thumbB.getWidth() > 512 || thumbB.getHeight() > 512) {
+                int tw = thumbB.getWidth(), th = thumbB.getHeight();
+                if (tw > th) { th = std::max(1, (th * 512) / tw); tw = 512; }
+                else { tw = std::max(1, (tw * 512) / th); th = 512; }
+                thumbB = thumbB.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
+            }
+            juce::MemoryOutputStream mos;
+            juce::JPEGImageFormat jpeg;
+            jpeg.writeImageToStream(thumbB, mos);
+            xml->setAttribute("imageB_b64", juce::Base64::toBase64(mos.getData(), mos.getDataSize()));
+        }
+
+        copyXmlToBinary (*xml, destData);
+    }
 }
 
 void PhotoSynthAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -595,6 +689,36 @@ void PhotoSynthAudioProcessor::setStateInformation (const void* data, int sizeIn
     std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
     if (xmlState.get() != nullptr && xmlState->hasTagName (apvts.state.getType())) {
         apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+
+        if (xmlState->hasAttribute("slotAName"))
+            slotAName = xmlState->getStringAttribute("slotAName");
+        if (xmlState->hasAttribute("slotBName"))
+            slotBName = xmlState->getStringAttribute("slotBName");
+        if (xmlState->hasAttribute("currentBpm"))
+            currentBpm = (float)xmlState->getDoubleAttribute("currentBpm", 120.0);
+
+        if (xmlState->hasAttribute("imageA_b64")) {
+            juce::MemoryOutputStream mos;
+            juce::Base64::convertFromBase64(mos, xmlState->getStringAttribute("imageA_b64"));
+            auto img = juce::ImageFileFormat::loadFrom(mos.getData(), mos.getDataSize());
+            if (img.isValid()) {
+                imageSlotA = img;
+                analysisSlotA = ImageAnalyzer::analyzeImage(img);
+            }
+        }
+
+        if (xmlState->hasAttribute("imageB_b64")) {
+            juce::MemoryOutputStream mos;
+            juce::Base64::convertFromBase64(mos, xmlState->getStringAttribute("imageB_b64"));
+            auto img = juce::ImageFileFormat::loadFrom(mos.getData(), mos.getDataSize());
+            if (img.isValid()) {
+                imageSlotB = img;
+                analysisSlotB = ImageAnalyzer::analyzeImage(img);
+            }
+        }
+
+        updateMorphState();
+        updateBlendedImage();
     }
 }
 

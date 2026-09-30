@@ -60,8 +60,16 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
     if (e?.currentTarget instanceof HTMLElement) {
       e.currentTarget.blur();
     }
-    try {
-      if (pluginBridge.isNativeEnvironment()) {
+
+    // Primary: Trigger HTML file input directly (100% matching AI Studio prototype behavior, non-blocking)
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+      return;
+    }
+
+    // Secondary fallback for native environments where fileInput is unavailable
+    if (pluginBridge.isNativeEnvironment()) {
+      try {
         const res = await pluginBridge.openImageFileChooser(targetSlot);
         if (res && res.dataUrl) {
           if (targetSlot === 'B') {
@@ -69,18 +77,16 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
           } else {
             onUploadSlotA(res.dataUrl, res.fileName);
           }
-          if (document.activeElement instanceof HTMLElement) {
-            document.activeElement.blur();
-          }
-          try { window.focus(); } catch {}
-          return;
         }
+      } catch (err) {
+        console.warn('Native file chooser error:', err);
+      } finally {
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        setTimeout(() => { try { window.focus(); } catch {} }, 100);
       }
-    } catch (err) {
-      console.warn('Native file chooser error:', err);
     }
-    fileInputRef.current?.click();
-    setTimeout(() => { try { window.focus(); } catch {} }, 500);
   };
 
   const handleDragOver = (e: React.DragEvent) => {

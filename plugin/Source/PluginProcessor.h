@@ -53,6 +53,9 @@ public:
 
     juce::String getSlotAName() const { return slotAName; }
     juce::String getSlotBName() const { return slotBName; }
+    juce::String getImageSlotAAsDataUrl() const;
+    juce::String getImageSlotBAsDataUrl() const;
+    void syncSlotImageFromFrontend(const juce::String& slot, const juce::String& dataUrl, const juce::String& name);
 
     ImageAnalysisResult getLatestAnalysis() const { return currentAnalysis; }
     ImageAnalysisResult getAnalysisA() const { return analysisSlotA; }

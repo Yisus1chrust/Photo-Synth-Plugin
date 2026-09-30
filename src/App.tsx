@@ -103,28 +103,7 @@ export default function App() {
   const [showKeyboard, setShowKeyboard] = useState<boolean>(true);
   const [selectedColorPoints, setSelectedColorPoints] = useState<SelectedColorPoint[]>([]);
   const [presetToDeleteId, setPresetToDeleteId] = useState<string | null>(null);
-
-  // Initialize Hybrid Plugin Bridge (Eversynth Architecture)
-  useEffect(() => {
-    pluginBridge.initNativeBridge();
-
-    const unsubParam = pluginBridge.onParameterChange((paramId, value) => {
-      setPatch((prev) => {
-        if (!prev) return prev;
-        return { ...prev, [paramId]: value };
-      });
-    });
-
-    const unsubBpm = pluginBridge.onBpmChange((newBpm) => {
-      setBpm(newBpm);
-      setBpmInputVal(String(Math.round(newBpm)));
-    });
-
-    return () => {
-      unsubParam();
-      unsubBpm();
-    };
-  }, []);
+  const initialLoadDone = useRef(false);
 
   // Helper to process image source into compact base64 data & metrics
   // Image analysis & loading pipeline
@@ -229,7 +208,6 @@ export default function App() {
       setIsLoading(true);
       setSelectedColorPoints([]);
 
-      // Safety timeout so UI spinner is never locked if anything unexpected occurs
       const safetySpinnerTimeout = setTimeout(() => {
         setIsLoading(false);
       }, 5000);
@@ -246,6 +224,9 @@ export default function App() {
 
         setSlotA(newSlotA);
         setImagePreviewUrl(data.dataUrl);
+
+        // Keep C++ processor in sync for state preservation
+        pluginBridge.syncSlotImage('A', data.dataUrl, data.title);
 
         if (slotB) {
           const morphedP = interpolatePatchParameters(newSlotA.patch, slotB.patch, morphValue);
@@ -302,6 +283,9 @@ export default function App() {
 
         setSlotB(newSlotB);
 
+        // Keep C++ processor in sync for state preservation
+        pluginBridge.syncSlotImage('B', data.dataUrl, data.title);
+
         if (slotA) {
           const morphedP = interpolatePatchParameters(slotA.patch, newSlotB.patch, morphValue);
           const morphedM = interpolateImageMetrics(slotA.metrics, newSlotB.metrics, morphValue);
@@ -326,17 +310,126 @@ export default function App() {
     [processImageSourceToData, slotA, morphValue]
   );
 
-  // Initial load on mount: Slot A = Preset 0, Slot B = Preset 1
-  const initialLoadDone = useRef(false);
+  // Unified Plugin Bridge Initialization & State Restoration
   useEffect(() => {
-    if (!initialLoadDone.current && samplePresets.length >= 2) {
-      initialLoadDone.current = true;
-      loadSlotA(samplePresets[0].dataUrl, samplePresets[0].title, samplePresets[0].id).then(() => {
-        loadSlotB(samplePresets[1].dataUrl, samplePresets[1].title, samplePresets[1].id);
+    let isMounted = true;
+
+    (async () => {
+      await pluginBridge.initNativeBridge();
+
+      if (pluginBridge.isNativeEnvironment()) {
+        try {
+          const init = await pluginBridge.getInitialState();
+          if (init && typeof init === 'object' && isMounted) {
+            initialLoadDone.current = true;
+
+            if (init.bpm && typeof init.bpm === 'number') {
+              setBpm(init.bpm);
+              setBpmInputVal(String(Math.round(init.bpm)));
+            }
+
+            if (typeof init.morph === 'number') {
+              setMorphValue(init.morph);
+            }
+
+            let loadedA: SlotData | null = null;
+            let loadedB: SlotData | null = null;
+
+            if (init.slotADataUrl) {
+              const dataA = await processImageSourceToData(init.slotADataUrl, init.slotAName || 'Image A');
+              loadedA = {
+                id: 'slot-a-native',
+                title: init.slotAName || 'Image A',
+                dataUrl: init.slotADataUrl,
+                metrics: dataA.metrics,
+                patch: dataA.patch,
+              };
+              setSlotA(loadedA);
+              setImagePreviewUrl(init.slotADataUrl);
+              setMetrics(dataA.metrics);
+              setPatch(dataA.patch);
+              setBaselinePatch(dataA.patch);
+            }
+
+            if (init.slotBDataUrl) {
+              const dataB = await processImageSourceToData(init.slotBDataUrl, init.slotBName || 'Image B');
+              loadedB = {
+                id: 'slot-b-native',
+                title: init.slotBName || 'Image B',
+                dataUrl: init.slotBDataUrl,
+                metrics: dataB.metrics,
+                patch: dataB.patch,
+              };
+              setSlotB(loadedB);
+            }
+
+            // Restore morphed patch and overlay APVTS parameters so user's DAW edits are preserved
+            if (init.parameters && typeof init.parameters === 'object') {
+              const p = init.parameters;
+              setPatch((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  cutoffOffset: p.cutoff !== undefined ? p.cutoff : prev.cutoffOffset,
+                  resonance: p.resonance !== undefined ? p.resonance : prev.resonance,
+                  lfoRate: p.lfoRate !== undefined ? p.lfoRate : prev.lfoRate,
+                  lfoDepth: p.lfoDepth !== undefined ? p.lfoDepth : prev.lfoDepth,
+                  masterVolume: p.volume !== undefined ? p.volume : prev.masterVolume,
+                  attackTime: p.attack !== undefined ? p.attack : prev.attackTime,
+                  decayTime: p.decay !== undefined ? p.decay : prev.decayTime,
+                  sustainLevel: p.sustain !== undefined ? p.sustain : prev.sustainLevel,
+                  releaseTime: p.release !== undefined ? p.release : prev.releaseTime,
+                  limiterEnabled: p.limiter !== undefined ? p.limiter > 0.5 : prev.limiterEnabled,
+                  threshold: p.threshold !== undefined ? p.threshold : prev.threshold,
+                };
+              });
+            }
+
+            setAudioStarted(true);
+            return;
+          }
+        } catch (err) {
+          console.warn('Initial native state restoration note:', err);
+        }
+      }
+
+      // Web Browser Fallback: Load Preset 0 & Preset 1
+      if (!initialLoadDone.current && samplePresets.length >= 2 && isMounted) {
+        initialLoadDone.current = true;
+        loadSlotA(samplePresets[0].dataUrl, samplePresets[0].title, samplePresets[0].id).then(() => {
+          if (isMounted) {
+            loadSlotB(samplePresets[1].dataUrl, samplePresets[1].title, samplePresets[1].id);
+          }
+        });
+        setSelectedPresetId(samplePresets[0].id);
+      }
+    })();
+
+    const unsubParam = pluginBridge.onParameterChange((paramId, value) => {
+      setPatch((prev) => {
+        if (!prev) return prev;
+        const key = paramId === 'cutoff' ? 'cutoffOffset' :
+                    paramId === 'attack' ? 'attackTime' :
+                    paramId === 'decay' ? 'decayTime' :
+                    paramId === 'sustain' ? 'sustainLevel' :
+                    paramId === 'release' ? 'releaseTime' :
+                    paramId === 'volume' ? 'masterVolume' :
+                    paramId === 'limiter' ? 'limiterEnabled' : paramId;
+        return { ...prev, [key]: value };
       });
-      setSelectedPresetId(samplePresets[0].id);
-    }
-  }, [loadSlotA, loadSlotB, samplePresets]);
+    });
+
+    const unsubBpm = pluginBridge.onBpmChange((newBpm) => {
+      setBpm(newBpm);
+      setBpmInputVal(String(Math.round(newBpm)));
+    });
+
+    return () => {
+      isMounted = false;
+      unsubParam();
+      unsubBpm();
+    };
+  }, [processImageSourceToData, loadSlotA, loadSlotB, samplePresets]);
 
   // Morph slider change handler
   const handleMorphChange = useCallback(

@@ -109,7 +109,23 @@ ImageAnalysisResult ImageAnalyzer::analyzeImage(const juce::Image& image)
     ImageAnalysisResult result;
     if (image.isNull()) return result;
 
-    juce::Image::BitmapData bitmap(image, juce::Image::BitmapData::readOnly);
+    // Rescale down to max 256 for instantaneous evaluation (< 1ms)
+    juce::Image evalImage = image;
+    const int maxDim = 256;
+    if (image.getWidth() > maxDim || image.getHeight() > maxDim) {
+        int w = image.getWidth();
+        int h = image.getHeight();
+        if (w > h) {
+            h = std::max(1, (h * maxDim) / w);
+            w = maxDim;
+        } else {
+            w = std::max(1, (w * maxDim) / h);
+            h = maxDim;
+        }
+        evalImage = image.rescaled(w, h, juce::Graphics::lowResamplingQuality);
+    }
+
+    juce::Image::BitmapData bitmap(evalImage, juce::Image::BitmapData::readOnly);
 
     // 1. Calculate 64-Bit FNV-1a Checksum Seed
     result.pixelSeed = computeFNV1a64(bitmap);

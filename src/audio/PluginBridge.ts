@@ -280,15 +280,24 @@ class HybridPluginBridge {
   }
 
   /**
+   * Sync image data and name to native C++ processor for state persistence.
+   */
+  public syncSlotImage(slot: 'A' | 'B', dataUrl: string, name: string): void {
+    if (this.isConnectedToNative) {
+      this.callNative('syncSlotImage', slot, dataUrl, name);
+    }
+  }
+
+  /**
    * Send note on event.
    */
   public noteOn(midiNote: number, velocity: number = 0.85): void {
     if (this.isConnectedToNative) {
       this.callNative('noteOn', midiNote, velocity);
+    } else {
+      // Trigger WebAudio only in browser environment
+      globalAudioEngine.noteOn(midiNote, velocity);
     }
-
-    // Always trigger web audio fallback
-    globalAudioEngine.noteOn(midiNote, velocity);
   }
 
   /**
@@ -297,10 +306,10 @@ class HybridPluginBridge {
   public noteOff(midiNote: number): void {
     if (this.isConnectedToNative) {
       this.callNative('noteOff', midiNote);
+    } else {
+      // Web audio fallback in browser
+      globalAudioEngine.noteOff(midiNote);
     }
-
-    // Web audio fallback
-    globalAudioEngine.noteOff(midiNote);
   }
 
   /**
@@ -346,6 +355,20 @@ class HybridPluginBridge {
         window.__JUCE__.backend.emit('loadPreset', { name });
       }
     }
+  }
+
+  /**
+   * Fetch complete initial plugin state (BPM, parameters, and loaded slot images) from C++ processor.
+   */
+  public async getInitialState(): Promise<any> {
+    if (this.isConnectedToNative) {
+      try {
+        return await this.callNative('getInitialState');
+      } catch (err) {
+        console.warn('getInitialState note:', err);
+      }
+    }
+    return null;
   }
 
   /**

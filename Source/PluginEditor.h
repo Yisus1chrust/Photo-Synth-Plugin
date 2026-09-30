@@ -49,6 +49,7 @@ private:
     // Automation tracking
     float lastReportedBpm { 120.0f };
     std::map<juce::String, float> lastReportedParams;
+    bool wasActiveLastFrame { false };
 
     // Native file dialog support for image loading
     std::unique_ptr<juce::FileChooser> fileChooser;

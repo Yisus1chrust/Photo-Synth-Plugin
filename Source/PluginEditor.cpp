@@ -87,7 +87,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
                 "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif");
 
-            auto folderFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+            auto folderFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::useOSNativeDialogBox;
 
             fileChooser->launchAsync(folderFlags, [this, slot, completion](const juce::FileChooser& fc) {
                 auto resultFile = fc.getResult();
@@ -144,6 +144,16 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 }
                 completion(juce::var());
             });
+        })
+        // 1d. syncSlotImage native function (receives image dataUrl from JS file upload)
+        .withNativeFunction("syncSlotImage", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
+            if (args.size() >= 3) {
+                juce::String slot = args[0].toString();
+                juce::String dataUrl = args[1].toString();
+                juce::String name = args[2].toString();
+                audioProcessor.syncSlotImageFromFrontend(slot, dataUrl, name);
+            }
+            completion(juce::var());
         })
         // 2. noteOn native function
         .withNativeFunction("noteOn", [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion completion) {
@@ -202,11 +212,27 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
             auto* obj = new juce::DynamicObject();
             obj->setProperty("bpm", audioProcessor.getBpm());
             obj->setProperty("isNativeHost", true);
+            obj->setProperty("slotAName", audioProcessor.getSlotAName());
+            obj->setProperty("slotBName", audioProcessor.getSlotBName());
+            obj->setProperty("slotADataUrl", audioProcessor.getImageSlotAAsDataUrl());
+            obj->setProperty("slotBDataUrl", audioProcessor.getImageSlotBAsDataUrl());
+            obj->setProperty("morph", (double)*audioProcessor.apvts.getRawParameterValue("morph"));
 
             auto* paramsObj = new juce::DynamicObject();
-            for (auto* param : audioProcessor.getParameters()) {
-                if (auto* withId = dynamic_cast<juce::AudioProcessorParameterWithID*>(param)) {
-                    paramsObj->setProperty(withId->paramID, param->getValue());
+            const char* paramKeys[] = {
+                "cutoff", "resonance", "lfoRate", "lfoDepth",
+                "volume", "attack", "decay", "sustain", "release",
+                "morph", "limiter", "threshold", "drive", "archetype",
+                "delayEnabled", "delayTime", "delayFeedback", "delayMix",
+                "reverbEnabled", "reverbSize", "reverbDecay", "reverbMix",
+                "chorusEnabled", "chorusRate", "chorusDepth", "chorusMix",
+                "phaserEnabled", "phaserRate", "phaserDepth", "phaserFeedback", "phaserMix",
+                "flangerEnabled", "flangerRate", "flangerDepth", "flangerMix",
+                "distortionEnabled", "distortionDrive", "distortionMix"
+            };
+            for (const char* key : paramKeys) {
+                if (auto* p = audioProcessor.apvts.getRawParameterValue(key)) {
+                    paramsObj->setProperty(key, (double)*p);
                 }
             }
             obj->setProperty("parameters", juce::var(paramsObj));
@@ -220,8 +246,8 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
     // Navigate to offline local resource provider root
     webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
 
-    // Start 30 FPS timer for real-time oscilloscope & automation streaming (gentle on WebView IPC)
-    startTimerHz(30);
+    // Start 20 FPS timer for real-time oscilloscope & automation streaming (gentle on WebView IPC)
+    startTimerHz(20);
 }
 
 PhotoSynthAudioEditor::~PhotoSynthAudioEditor()
@@ -337,16 +363,25 @@ void PhotoSynthAudioEditor::timerCallback()
     float scopeBuffer[256];
     audioProcessor.getScopeData(scopeBuffer, 256);
 
-    juce::String js;
-    js.preallocateBytes(2048);
-    js << "if(window.__PhotoSynthWebview&&window.__PhotoSynthWebview.onWaveformUpdate){"
-       << "window.__PhotoSynthWebview.onWaveformUpdate([";
+    float maxAmp = 0.0f;
     for (int i = 0; i < 256; ++i) {
-        js << juce::String(scopeBuffer[i], 3);
-        if (i < 255) js << ",";
+        float absVal = std::abs(scopeBuffer[i]);
+        if (absVal > maxAmp) maxAmp = absVal;
     }
-    js << "]);}";
-    webView->evaluateJavascript(js);
+
+    if (maxAmp > 0.0005f || wasActiveLastFrame) {
+        wasActiveLastFrame = (maxAmp > 0.0005f);
+        juce::String js;
+        js.preallocateBytes(2048);
+        js << "if(window.__PhotoSynthWebview&&window.__PhotoSynthWebview.onWaveformUpdate){"
+           << "window.__PhotoSynthWebview.onWaveformUpdate([";
+        for (int i = 0; i < 256; ++i) {
+            js << juce::String(scopeBuffer[i], 3);
+            if (i < 255) js << ",";
+        }
+        js << "]);}";
+        webView->evaluateJavascript(js);
+    }
 
     // 2. Sync DAW host tempo changes
     float currentBpm = audioProcessor.getBpm();

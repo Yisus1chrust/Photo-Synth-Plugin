@@ -52,6 +52,7 @@ private:
     float phase1 { 0.0f };
     float phase2 { 0.0f };
     float phaseSub { 0.0f };
+    float phaseMod { 0.0f };
     float lfoPhase { 0.0f };
 
     // 2-pole resonant stereo filter state

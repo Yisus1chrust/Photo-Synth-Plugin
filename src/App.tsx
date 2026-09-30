@@ -346,9 +346,6 @@ export default function App() {
               };
               setSlotA(loadedA);
               setImagePreviewUrl(init.slotADataUrl);
-              setMetrics(dataA.metrics);
-              setPatch(dataA.patch);
-              setBaselinePatch(dataA.patch);
             }
 
             if (init.slotBDataUrl) {
@@ -363,26 +360,59 @@ export default function App() {
               setSlotB(loadedB);
             }
 
+            const effectiveMorph = typeof init.morph === 'number' ? init.morph : morphValue;
+            let basePatch: PatchParameters | null = null;
+            let baseMetrics: ImageMetrics | null = null;
+
+            if (loadedA && loadedB) {
+              basePatch = interpolatePatchParameters(loadedA.patch, loadedB.patch, effectiveMorph);
+              baseMetrics = interpolateImageMetrics(loadedA.metrics, loadedB.metrics, effectiveMorph);
+            } else if (loadedA) {
+              basePatch = loadedA.patch;
+              baseMetrics = loadedA.metrics;
+            } else if (loadedB) {
+              basePatch = loadedB.patch;
+              baseMetrics = loadedB.metrics;
+            }
+
             // Restore morphed patch and overlay APVTS parameters so user's DAW edits are preserved
-            if (init.parameters && typeof init.parameters === 'object') {
+            if (basePatch && init.parameters && typeof init.parameters === 'object') {
               const p = init.parameters;
-              setPatch((prev) => {
-                if (!prev) return prev;
-                return {
-                  ...prev,
-                  cutoffOffset: p.cutoff !== undefined ? p.cutoff : prev.cutoffOffset,
-                  resonance: p.resonance !== undefined ? p.resonance : prev.resonance,
-                  lfoRate: p.lfoRate !== undefined ? p.lfoRate : prev.lfoRate,
-                  lfoDepth: p.lfoDepth !== undefined ? p.lfoDepth : prev.lfoDepth,
-                  masterVolume: p.volume !== undefined ? p.volume : prev.masterVolume,
-                  attackTime: p.attack !== undefined ? p.attack : prev.attackTime,
-                  decayTime: p.decay !== undefined ? p.decay : prev.decayTime,
-                  sustainLevel: p.sustain !== undefined ? p.sustain : prev.sustainLevel,
-                  releaseTime: p.release !== undefined ? p.release : prev.releaseTime,
-                  limiterEnabled: p.limiter !== undefined ? p.limiter > 0.5 : prev.limiterEnabled,
-                  threshold: p.threshold !== undefined ? p.threshold : prev.threshold,
-                };
-              });
+              const pArch = p.archetype !== undefined ? Math.round(p.archetype) : undefined;
+              const engineType = pArch === 1 ? 'digital_fm_bells' : pArch === 2 ? 'hybrid_wavetable' : (pArch === 0 ? 'analog_brass' : basePatch.engineType);
+
+              const restoredEffects = { ...(basePatch.effects || createDefaultEffects()) };
+              if (p.delayEnabled !== undefined) restoredEffects.delay = { ...restoredEffects.delay, enabled: p.delayEnabled > 0.5, intensity: p.delayMix ?? restoredEffects.delay.intensity };
+              if (p.reverbEnabled !== undefined) restoredEffects.reverb = { ...restoredEffects.reverb, enabled: p.reverbEnabled > 0.5, intensity: p.reverbMix ?? restoredEffects.reverb.intensity };
+              if (p.chorusEnabled !== undefined) restoredEffects.chorus = { ...restoredEffects.chorus, enabled: p.chorusEnabled > 0.5, intensity: p.chorusMix ?? restoredEffects.chorus.intensity };
+              if (p.phaserEnabled !== undefined) restoredEffects.phaser = { ...restoredEffects.phaser, enabled: p.phaserEnabled > 0.5, intensity: p.phaserMix ?? restoredEffects.phaser.intensity };
+              if (p.flangerEnabled !== undefined) restoredEffects.flanger = { ...restoredEffects.flanger, enabled: p.flangerEnabled > 0.5, intensity: p.flangerMix ?? restoredEffects.flanger.intensity };
+              if (p.distortionEnabled !== undefined) restoredEffects.distortion = { ...restoredEffects.distortion, enabled: p.distortionEnabled > 0.5, intensity: p.distortionMix ?? restoredEffects.distortion.intensity };
+
+              basePatch = {
+                ...basePatch,
+                engineType: engineType as any,
+                cutoffOffset: p.cutoff !== undefined ? p.cutoff : basePatch.cutoffOffset,
+                resonance: p.resonance !== undefined ? p.resonance : basePatch.resonance,
+                lfoRate: p.lfoRate !== undefined ? p.lfoRate : basePatch.lfoRate,
+                lfoDepth: p.lfoDepth !== undefined ? p.lfoDepth : basePatch.lfoDepth,
+                masterVolume: p.volume !== undefined ? p.volume : basePatch.masterVolume,
+                attackTime: p.attack !== undefined ? p.attack : basePatch.attackTime,
+                decayTime: p.decay !== undefined ? p.decay : basePatch.decayTime,
+                sustainLevel: p.sustain !== undefined ? p.sustain : basePatch.sustainLevel,
+                releaseTime: p.release !== undefined ? p.release : basePatch.releaseTime,
+                limiterEnabled: p.limiter !== undefined ? p.limiter > 0.5 : basePatch.limiterEnabled,
+                threshold: p.threshold !== undefined ? p.threshold : basePatch.threshold,
+                effects: restoredEffects,
+              };
+            }
+
+            if (basePatch && isMounted) {
+              setPatch(basePatch);
+              setBaselinePatch(basePatch);
+            }
+            if (baseMetrics && isMounted) {
+              setMetrics(baseMetrics);
             }
 
             setAudioStarted(true);
@@ -393,8 +423,8 @@ export default function App() {
         }
       }
 
-      // Web Browser Fallback: Load Preset 0 & Preset 1
-      if (!initialLoadDone.current && samplePresets.length >= 2 && isMounted) {
+      // Web Browser Fallback: ONLY run when NOT in native plugin environment
+      if (!pluginBridge.isNativeEnvironment() && !initialLoadDone.current && samplePresets.length >= 2 && isMounted) {
         initialLoadDone.current = true;
         loadSlotA(samplePresets[0].dataUrl, samplePresets[0].title, samplePresets[0].id).then(() => {
           if (isMounted) {

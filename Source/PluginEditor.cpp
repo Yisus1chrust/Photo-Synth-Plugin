@@ -30,6 +30,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
     // Build JUCE 8 WebBrowserComponent Options
     auto options = juce::WebBrowserComponent::Options{}
         .withNativeIntegrationEnabled()
+        .withUserScript("window.__PHOTO_SYNTH_HYBRID__ = true; window.__PHOTO_SYNTH_NATIVE_HOST__ = true;")
         .withResourceProvider([this](const juce::String& path) {
             return getResource(path);
         })
@@ -88,7 +89,9 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
                 "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif");
 
-            auto folderFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+            auto folderFlags = juce::FileBrowserComponent::openMode 
+                             | juce::FileBrowserComponent::canSelectFiles 
+                             | juce::FileBrowserComponent::useOSNativeDialogBox;
 
             fileChooser->launchAsync(folderFlags, [this, slot, completion](const juce::FileChooser& fc) {
                 auto resultFile = fc.getResult();
@@ -244,8 +247,8 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
     webView = std::make_unique<juce::WebBrowserComponent>(options);
     addAndMakeVisible(*webView);
 
-    // Navigate to offline local resource provider root
-    webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
+    // Navigate to offline local resource provider root with hybrid flag
+    webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot() + "?hybrid=1");
 
     // Start 20 FPS timer for real-time oscilloscope & automation streaming (gentle on WebView IPC)
     startTimerHz(20);

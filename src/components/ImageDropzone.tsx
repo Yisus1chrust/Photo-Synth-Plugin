@@ -61,13 +61,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
       e.currentTarget.blur();
     }
 
-    // Primary: Trigger HTML file input directly (100% matching AI Studio prototype behavior, non-blocking)
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
-      return;
-    }
-
-    // Secondary fallback for native environments where fileInput is unavailable
+    // 1. Native VST3/AU Host: Use OS native file dialog via JUCE (smooth, unblocked)
     if (pluginBridge.isNativeEnvironment()) {
       try {
         const res = await pluginBridge.openImageFileChooser(targetSlot);
@@ -77,15 +71,21 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
           } else {
             onUploadSlotA(res.dataUrl, res.fileName);
           }
+          return;
         }
       } catch (err) {
-        console.warn('Native file chooser error:', err);
+        console.warn('Native file chooser error, falling back to input:', err);
       } finally {
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
         setTimeout(() => { try { window.focus(); } catch {} }, 100);
       }
+    }
+
+    // 2. Web Browser: Trigger HTML file input directly
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
     }
   };
 

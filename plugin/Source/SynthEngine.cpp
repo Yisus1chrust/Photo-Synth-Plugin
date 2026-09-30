@@ -202,7 +202,8 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         if (phaseMod >= 1.0f) phaseMod -= 1.0f;
 
         // Apply dynamic cutoff modulation with filter envelope & LFO (musical & open)
-        float modCutoff = juce::jlimit(80.0f, 19500.0f, baseCutoff * (0.85f + fEnv * 0.35f) * (1.0f + lfoVal * 0.20f));
+        float maxAllowedCutoff = std::min(19500.0f, (float)currentSampleRate * 0.45f);
+        float modCutoff = juce::jlimit(40.0f, maxAllowedCutoff, baseCutoff * (0.85f + fEnv * 0.35f) * (1.0f + lfoVal * 0.20f));
         float g = std::tan(juce::MathConstants<float>::pi * modCutoff / (float)currentSampleRate);
         float k = 1.0f / q;
         float a1 = 1.0f / (1.0f + g * (g + k));
@@ -214,17 +215,22 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         float outR = 0.0f;
         for (int ch = 0; ch < 2; ++ch)
         {
+            if (!std::isfinite(filterS1[ch]) || !std::isfinite(filterS2[ch])) {
+                filterS1[ch] = 0.0f;
+                filterS2[ch] = 0.0f;
+            }
             float inSample = (ch == 0) ? oscSampleL : oscSampleR;
             float v3 = inSample - filterS2[ch];
             float v1 = a1 * filterS1[ch] + a2 * v3;
             float v2 = filterS2[ch] + a2 * filterS1[ch] + a3 * v3;
             filterS1[ch] = 2.0f * v1 - filterS1[ch];
             filterS2[ch] = 2.0f * v2 - filterS2[ch];
-            if (ch == 0) outL = v2; else outR = v2;
+            float vOut = std::isfinite(v2) ? juce::jlimit(-3.0f, 3.0f, v2) : inSample;
+            if (ch == 0) outL = vOut; else outR = vOut;
         }
 
         // Voice envelope and velocity scaling
-        float voiceGain = envGain * currentVelocity * 0.85f;
+        float voiceGain = envGain * currentVelocity * 0.90f;
         float sampleL = outL * voiceGain;
         float sampleR = outR * voiceGain;
 
@@ -234,6 +240,9 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
             sampleL = std::tanh(sampleL * driveAmount) / std::tanh(driveAmount);
             sampleR = std::tanh(sampleR * driveAmount) / std::tanh(driveAmount);
         }
+
+        if (!std::isfinite(sampleL)) sampleL = 0.0f;
+        if (!std::isfinite(sampleR)) sampleR = 0.0f;
 
         outputBuffer.addSample(0, startSample + i, sampleL);
         if (numChannels > 1) {

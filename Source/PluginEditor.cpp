@@ -90,8 +90,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif");
 
             auto folderFlags = juce::FileBrowserComponent::openMode 
-                             | juce::FileBrowserComponent::canSelectFiles 
-                             | juce::FileBrowserComponent::useOSNativeDialogBox;
+                             | juce::FileBrowserComponent::canSelectFiles;
 
             fileChooser->launchAsync(folderFlags, [this, slot, completion](const juce::FileChooser& fc) {
                 auto resultFile = fc.getResult();

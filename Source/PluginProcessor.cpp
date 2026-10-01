@@ -308,32 +308,38 @@ juce::String PhotoSynthAudioProcessor::getImageSlotAAsDataUrl() const
 {
     if (!imageSlotA.isValid()) return {};
     juce::Image thumb = imageSlotA;
-    if (thumb.getWidth() > 512 || thumb.getHeight() > 512) {
+    const int maxDim = 512;
+    if (thumb.getWidth() > maxDim || thumb.getHeight() > maxDim) {
         int tw = thumb.getWidth(), th = thumb.getHeight();
-        if (tw > th) { th = std::max(1, (th * 512) / tw); tw = 512; }
-        else { tw = std::max(1, (tw * 512) / th); th = 512; }
+        if (tw > th) { th = std::max(1, (th * maxDim) / tw); tw = maxDim; }
+        else { tw = std::max(1, (tw * maxDim) / th); th = maxDim; }
         thumb = thumb.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
     }
     juce::MemoryOutputStream mos;
-    juce::JPEGImageFormat jpeg;
-    jpeg.writeImageToStream(thumb, mos);
-    return "data:image/jpeg;base64," + juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+    juce::PNGImageFormat png;
+    if (png.writeImageToStream(thumb, mos) && mos.getDataSize() > 0) {
+        return "data:image/png;base64," + juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+    }
+    return {};
 }
 
 juce::String PhotoSynthAudioProcessor::getImageSlotBAsDataUrl() const
 {
     if (!imageSlotB.isValid()) return {};
     juce::Image thumb = imageSlotB;
-    if (thumb.getWidth() > 512 || thumb.getHeight() > 512) {
+    const int maxDim = 512;
+    if (thumb.getWidth() > maxDim || thumb.getHeight() > maxDim) {
         int tw = thumb.getWidth(), th = thumb.getHeight();
-        if (tw > th) { th = std::max(1, (th * 512) / tw); tw = 512; }
-        else { tw = std::max(1, (tw * 512) / th); th = 512; }
+        if (tw > th) { th = std::max(1, (th * maxDim) / tw); tw = maxDim; }
+        else { tw = std::max(1, (tw * maxDim) / th); th = maxDim; }
         thumb = thumb.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
     }
     juce::MemoryOutputStream mos;
-    juce::JPEGImageFormat jpeg;
-    jpeg.writeImageToStream(thumb, mos);
-    return "data:image/jpeg;base64," + juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+    juce::PNGImageFormat png;
+    if (png.writeImageToStream(thumb, mos) && mos.getDataSize() > 0) {
+        return "data:image/png;base64," + juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+    }
+    return {};
 }
 
 void PhotoSynthAudioProcessor::syncSlotImageFromFrontend(const juce::String& slot, const juce::String& dataUrl, const juce::String& name)
@@ -661,9 +667,10 @@ void PhotoSynthAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
                 thumbA = thumbA.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
             }
             juce::MemoryOutputStream mos;
-            juce::JPEGImageFormat jpeg;
-            jpeg.writeImageToStream(thumbA, mos);
-            xml->setAttribute("imageA_b64", juce::Base64::toBase64(mos.getData(), mos.getDataSize()));
+            juce::PNGImageFormat png;
+            if (png.writeImageToStream(thumbA, mos) && mos.getDataSize() > 0) {
+                xml->setAttribute("imageA_b64", juce::Base64::toBase64(mos.getData(), mos.getDataSize()));
+            }
         }
 
         if (imageSlotB.isValid()) {
@@ -675,9 +682,10 @@ void PhotoSynthAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
                 thumbB = thumbB.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
             }
             juce::MemoryOutputStream mos;
-            juce::JPEGImageFormat jpeg;
-            jpeg.writeImageToStream(thumbB, mos);
-            xml->setAttribute("imageB_b64", juce::Base64::toBase64(mos.getData(), mos.getDataSize()));
+            juce::PNGImageFormat png;
+            if (png.writeImageToStream(thumbB, mos) && mos.getDataSize() > 0) {
+                xml->setAttribute("imageB_b64", juce::Base64::toBase64(mos.getData(), mos.getDataSize()));
+            }
         }
 
         copyXmlToBinary (*xml, destData);

@@ -95,54 +95,45 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
             fileChooser->launchAsync(folderFlags, [this, slot, completion](const juce::FileChooser& fc) {
                 auto resultFile = fc.getResult();
                 if (resultFile.existsAsFile()) {
-                    juce::MemoryBlock mb;
-                    if (resultFile.loadFileAsData(mb)) {
-                        juce::String b64 = juce::Base64::toBase64(mb.getData(), mb.getSize());
-                        juce::String ext = resultFile.getFileExtension().toLowerCase();
-                        juce::String mime = "image/png";
-                        if (ext == ".jpg" || ext == ".jpeg") mime = "image/jpeg";
-                        else if (ext == ".webp") mime = "image/webp";
-                        else if (ext == ".gif") mime = "image/gif";
-
-                        auto img = juce::ImageFileFormat::loadFrom(resultFile);
-                        juce::String dataUrl;
-                        if (img.isValid()) {
-                            // Downscale thumbnail for WebView to max 512px so IPC transfer is light (<50KB)
-                            juce::Image thumb = img;
-                            const int maxDim = 512;
-                            if (thumb.getWidth() > maxDim || thumb.getHeight() > maxDim) {
-                                int tw = thumb.getWidth();
-                                int th = thumb.getHeight();
-                                if (tw > th) {
-                                    th = std::max(1, (th * maxDim) / tw);
-                                    tw = maxDim;
-                                } else {
-                                    tw = std::max(1, (tw * maxDim) / th);
-                                    th = maxDim;
-                                }
-                                thumb = thumb.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
-                            }
-                            juce::MemoryOutputStream mos;
-                            juce::JPEGImageFormat jpeg;
-                            jpeg.writeImageToStream(thumb, mos);
-                            juce::String b64Thumb = juce::Base64::toBase64(mos.getData(), mos.getDataSize());
-                            dataUrl = "data:image/jpeg;base64," + b64Thumb;
-
-                            if (slot == "B") {
-                                audioProcessor.loadSlotBImage(img, resultFile.getFileNameWithoutExtension());
+                    auto img = juce::ImageFileFormat::loadFrom(resultFile);
+                    if (img.isValid()) {
+                        // Downscale thumbnail for WebView to max 512px so IPC transfer is light (<50KB)
+                        juce::Image thumb = img;
+                        const int maxDim = 512;
+                        if (thumb.getWidth() > maxDim || thumb.getHeight() > maxDim) {
+                            int tw = thumb.getWidth();
+                            int th = thumb.getHeight();
+                            if (tw > th) {
+                                th = std::max(1, (th * maxDim) / tw);
+                                tw = maxDim;
                             } else {
-                                audioProcessor.loadSlotAImage(img, resultFile.getFileNameWithoutExtension());
+                                tw = std::max(1, (tw * maxDim) / th);
+                                th = maxDim;
                             }
-                        } else {
-                            dataUrl = "data:" + mime + ";base64," + b64;
+                            thumb = thumb.rescaled(tw, th, juce::Graphics::mediumResamplingQuality);
                         }
 
-                        juce::DynamicObject::Ptr resObj = new juce::DynamicObject();
-                        resObj->setProperty("slot", slot);
-                        resObj->setProperty("fileName", resultFile.getFileName());
-                        resObj->setProperty("dataUrl", dataUrl);
-                        completion(juce::var(resObj.get()));
-                        return;
+                        juce::MemoryOutputStream mos;
+                        juce::PNGImageFormat png;
+                        juce::String dataUrl;
+                        if (png.writeImageToStream(thumb, mos) && mos.getDataSize() > 0) {
+                            dataUrl = "data:image/png;base64," + juce::Base64::toBase64(mos.getData(), mos.getDataSize());
+                        }
+
+                        if (slot == "B") {
+                            audioProcessor.loadSlotBImage(thumb, resultFile.getFileNameWithoutExtension());
+                        } else {
+                            audioProcessor.loadSlotAImage(thumb, resultFile.getFileNameWithoutExtension());
+                        }
+
+                        if (dataUrl.isNotEmpty()) {
+                            juce::DynamicObject::Ptr resObj = new juce::DynamicObject();
+                            resObj->setProperty("slot", slot);
+                            resObj->setProperty("fileName", resultFile.getFileName());
+                            resObj->setProperty("dataUrl", dataUrl);
+                            completion(juce::var(resObj.get()));
+                            return;
+                        }
                     }
                 }
                 completion(juce::var());

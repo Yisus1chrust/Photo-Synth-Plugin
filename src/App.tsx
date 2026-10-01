@@ -335,29 +335,59 @@ export default function App() {
             let loadedA: SlotData | null = null;
             let loadedB: SlotData | null = null;
 
-            if (init.slotADataUrl) {
-              const dataA = await processImageSourceToData(init.slotADataUrl, init.slotAName || 'Image A');
-              loadedA = {
-                id: 'slot-a-native',
-                title: init.slotAName || 'Image A',
-                dataUrl: init.slotADataUrl,
-                metrics: dataA.metrics,
-                patch: dataA.patch,
-              };
-              setSlotA(loadedA);
-              setImagePreviewUrl(init.slotADataUrl);
+            // Slot A: Use restored dataUrl or fallback to factory preset 0 ("Synthwave Sunset")
+            let slotADataUrl = init.slotADataUrl;
+            let slotAName = init.slotAName || 'Synthwave Sunset';
+            if (!slotADataUrl || slotADataUrl.length < 100) {
+              const matchA = samplePresets.find((p) => p.title === slotAName) || samplePresets[0];
+              if (matchA) {
+                slotADataUrl = matchA.dataUrl;
+                slotAName = matchA.title;
+              }
             }
 
-            if (init.slotBDataUrl) {
-              const dataB = await processImageSourceToData(init.slotBDataUrl, init.slotBName || 'Image B');
-              loadedB = {
-                id: 'slot-b-native',
-                title: init.slotBName || 'Image B',
-                dataUrl: init.slotBDataUrl,
-                metrics: dataB.metrics,
-                patch: dataB.patch,
-              };
-              setSlotB(loadedB);
+            if (slotADataUrl) {
+              try {
+                const dataA = await processImageSourceToData(slotADataUrl, slotAName);
+                loadedA = {
+                  id: 'slot-a-native',
+                  title: slotAName,
+                  dataUrl: dataA.dataUrl,
+                  metrics: dataA.metrics,
+                  patch: dataA.patch,
+                };
+                setSlotA(loadedA);
+                setImagePreviewUrl(dataA.dataUrl);
+              } catch (errA) {
+                console.warn('Slot A image load fallback note:', errA);
+              }
+            }
+
+            // Slot B: Use restored dataUrl or fallback to factory preset 1 ("Obsidian Crypt")
+            let slotBDataUrl = init.slotBDataUrl;
+            let slotBName = init.slotBName || 'Obsidian Crypt';
+            if (!slotBDataUrl || slotBDataUrl.length < 100) {
+              const matchB = samplePresets.find((p) => p.title === slotBName) || samplePresets[1];
+              if (matchB) {
+                slotBDataUrl = matchB.dataUrl;
+                slotBName = matchB.title;
+              }
+            }
+
+            if (slotBDataUrl) {
+              try {
+                const dataB = await processImageSourceToData(slotBDataUrl, slotBName);
+                loadedB = {
+                  id: 'slot-b-native',
+                  title: slotBName,
+                  dataUrl: dataB.dataUrl,
+                  metrics: dataB.metrics,
+                  patch: dataB.patch,
+                };
+                setSlotB(loadedB);
+              } catch (errB) {
+                console.warn('Slot B image load fallback note:', errB);
+              }
             }
 
             const effectiveMorph = typeof init.morph === 'number' ? init.morph : morphValue;

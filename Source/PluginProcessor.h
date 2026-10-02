@@ -30,7 +30,12 @@ public:
     const juce::String getName() const override { return "Photo Synth"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
+
+    #ifndef JucePlugin_PreferredChannelConfigurations
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+    #endif
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }

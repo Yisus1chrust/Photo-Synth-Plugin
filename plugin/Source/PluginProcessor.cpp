@@ -166,6 +166,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout PhotoSynthAudioProcessor::cr
     return { params.begin(), params.end() };
 }
 
+#ifndef JucePlugin_PreferredChannelConfigurations
+bool PhotoSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    // A software instrument synthesiser MUST NOT have audio input channels!
+    if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::disabled())
+        return false;
+
+    // Output must be stereo or mono
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo()
+     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono())
+        return false;
+
+    return true;
+}
+#endif
+
 void PhotoSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     synth.setCurrentPlaybackSampleRate (sampleRate);
@@ -412,6 +428,14 @@ void PhotoSynthAudioProcessor::allNotesOff()
 
 void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    juce::ScopedNoDenormals noDenormals;
+    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+
+    // 1. Explicitly clear all output channels to prevent any host residual audio or fallback sounds
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear (i, 0, buffer.getNumSamples());
+
     buffer.clear();
 
     // Sync BPM from DAW playhead transport if available

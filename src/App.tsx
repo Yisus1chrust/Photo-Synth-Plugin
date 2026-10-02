@@ -7,7 +7,13 @@ import {
   ImageEffectsState,
   createDefaultEffects,
 } from './types/synth';
-import { getSamplePresetPhotos } from './data/sampleImages';
+import {
+  getSamplePresetPhotos,
+  SYNTHWAVE_SUNSET_METRICS,
+  SYNTHWAVE_SUNSET_PATCH,
+  OBSIDIAN_CRYPT_METRICS,
+  OBSIDIAN_CRYPT_PATCH,
+} from './data/sampleImages';
 import { analyzeImage } from './audio/ImageAnalyzer';
 import { globalAudioEngine } from './audio/WebAudioEngine';
 import { calculateBlendedPatch } from './utils/colorBlending';
@@ -41,6 +47,26 @@ interface SlotData {
 export default function App() {
   const samplePresets = useRef(getSamplePresetPhotos()).current;
 
+  // Immediate synchronous factory defaults so the app NEVER opens with a blank screen or missing panels
+  const initialPresetA = samplePresets[0];
+  const initialPresetB = samplePresets[1];
+
+  const defaultSlotA: SlotData = {
+    id: initialPresetA.id,
+    title: initialPresetA.title,
+    dataUrl: initialPresetA.dataUrl,
+    metrics: initialPresetA.customMetrics || SYNTHWAVE_SUNSET_METRICS,
+    patch: initialPresetA.customPatch || SYNTHWAVE_SUNSET_PATCH,
+  };
+
+  const defaultSlotB: SlotData = {
+    id: initialPresetB.id,
+    title: initialPresetB.title,
+    dataUrl: initialPresetB.dataUrl,
+    metrics: initialPresetB.customMetrics || OBSIDIAN_CRYPT_METRICS,
+    patch: initialPresetB.customPatch || OBSIDIAN_CRYPT_PATCH,
+  };
+
   // State
   const [userPresets, setUserPresets] = useState<PresetPhoto[]>(() => {
     try {
@@ -73,19 +99,19 @@ export default function App() {
     }
   }, [userPresets]);
 
-  // A/B Morphing Slots
-  const [slotA, setSlotA] = useState<SlotData | null>(null);
-  const [slotB, setSlotB] = useState<SlotData | null>(null);
+  // A/B Morphing Slots (Pre-initialized with Synthwave Sunset & Obsidian Crypt)
+  const [slotA, setSlotA] = useState<SlotData | null>(defaultSlotA);
+  const [slotB, setSlotB] = useState<SlotData | null>(defaultSlotB);
   const [morphValue, setMorphValue] = useState<number>(0.0);
   const [isAutoSweeping, setIsAutoSweeping] = useState<boolean>(false);
   const [bpm, setBpm] = useState<number>(120);
   const [isEditingBpm, setIsEditingBpm] = useState<boolean>(false);
   const [bpmInputVal, setBpmInputVal] = useState<string>('120');
 
-  const [metrics, setMetrics] = useState<ImageMetrics | null>(null);
-  const [patch, setPatch] = useState<PatchParameters | null>(null);
-  const [baselinePatch, setBaselinePatch] = useState<PatchParameters | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<ImageMetrics | null>(defaultSlotA.metrics);
+  const [patch, setPatch] = useState<PatchParameters | null>(defaultSlotA.patch);
+  const [baselinePatch, setBaselinePatch] = useState<PatchParameters | null>(defaultSlotA.patch);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(defaultSlotA.dataUrl);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [audioStarted, setAudioStarted] = useState<boolean>(false);
   const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
@@ -99,7 +125,7 @@ export default function App() {
     const lic = getStoredLicense();
     return !lic || lic.status !== 'active';
   });
-  const [selectedPresetId, setSelectedPresetId] = useState<string>('');
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(defaultSlotA.id);
   const [showKeyboard, setShowKeyboard] = useState<boolean>(true);
   const [selectedColorPoints, setSelectedColorPoints] = useState<SelectedColorPoint[]>([]);
   const [presetToDeleteId, setPresetToDeleteId] = useState<string | null>(null);
@@ -310,9 +336,17 @@ export default function App() {
     [processImageSourceToData, slotA, morphValue]
   );
 
-  // Unified Plugin Bridge Initialization & State Restoration
+  // Unified Plugin Bridge Initialization & State Restoration (Mount Only)
   useEffect(() => {
     let isMounted = true;
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
+
+    // Immediately prime audio engine with default Synthwave Sunset patch
+    globalAudioEngine.updateParameters(defaultSlotA.patch);
+    pluginBridge.syncFullPatch(defaultSlotA.patch, defaultSlotA.metrics);
+    pluginBridge.syncSlotImage('A', defaultSlotA.dataUrl, defaultSlotA.title);
+    pluginBridge.syncSlotImage('B', defaultSlotB.dataUrl, defaultSlotB.title);
 
     (async () => {
       await pluginBridge.initNativeBridge();
@@ -321,8 +355,6 @@ export default function App() {
         try {
           const init = await pluginBridge.getInitialState();
           if (init && typeof init === 'object' && isMounted) {
-            initialLoadDone.current = true;
-
             if (init.bpm && typeof init.bpm === 'number') {
               setBpm(init.bpm);
               setBpmInputVal(String(Math.round(init.bpm)));
@@ -335,23 +367,13 @@ export default function App() {
             let loadedA: SlotData | null = null;
             let loadedB: SlotData | null = null;
 
-            // Slot A: Use restored dataUrl or fallback to factory preset 0 ("Synthwave Sunset")
-            let slotADataUrl = init.slotADataUrl;
-            let slotAName = init.slotAName || 'Synthwave Sunset';
-            if (!slotADataUrl || slotADataUrl.length < 100) {
-              const matchA = samplePresets.find((p) => p.title === slotAName) || samplePresets[0];
-              if (matchA) {
-                slotADataUrl = matchA.dataUrl;
-                slotAName = matchA.title;
-              }
-            }
-
-            if (slotADataUrl) {
+            // Slot A: If custom image saved, restore it
+            if (init.slotADataUrl && init.slotADataUrl.length > 100) {
               try {
-                const dataA = await processImageSourceToData(slotADataUrl, slotAName);
+                const dataA = await processImageSourceToData(init.slotADataUrl, init.slotAName || 'Image A');
                 loadedA = {
                   id: 'slot-a-native',
-                  title: slotAName,
+                  title: init.slotAName || 'Image A',
                   dataUrl: dataA.dataUrl,
                   metrics: dataA.metrics,
                   patch: dataA.patch,
@@ -359,38 +381,28 @@ export default function App() {
                 setSlotA(loadedA);
                 setImagePreviewUrl(dataA.dataUrl);
               } catch (errA) {
-                console.warn('Slot A image load fallback note:', errA);
+                console.warn('Slot A image load note:', errA);
               }
             }
 
-            // Slot B: Use restored dataUrl or fallback to factory preset 1 ("Obsidian Crypt")
-            let slotBDataUrl = init.slotBDataUrl;
-            let slotBName = init.slotBName || 'Obsidian Crypt';
-            if (!slotBDataUrl || slotBDataUrl.length < 100) {
-              const matchB = samplePresets.find((p) => p.title === slotBName) || samplePresets[1];
-              if (matchB) {
-                slotBDataUrl = matchB.dataUrl;
-                slotBName = matchB.title;
-              }
-            }
-
-            if (slotBDataUrl) {
+            // Slot B: If custom image saved, restore it
+            if (init.slotBDataUrl && init.slotBDataUrl.length > 100) {
               try {
-                const dataB = await processImageSourceToData(slotBDataUrl, slotBName);
+                const dataB = await processImageSourceToData(init.slotBDataUrl, init.slotBName || 'Image B');
                 loadedB = {
                   id: 'slot-b-native',
-                  title: slotBName,
+                  title: init.slotBName || 'Image B',
                   dataUrl: dataB.dataUrl,
                   metrics: dataB.metrics,
                   patch: dataB.patch,
                 };
                 setSlotB(loadedB);
               } catch (errB) {
-                console.warn('Slot B image load fallback note:', errB);
+                console.warn('Slot B image load note:', errB);
               }
             }
 
-            const effectiveMorph = typeof init.morph === 'number' ? init.morph : morphValue;
+            const effectiveMorph = typeof init.morph === 'number' ? init.morph : 0.0;
             let basePatch: PatchParameters | null = null;
             let baseMetrics: ImageMetrics | null = null;
 
@@ -440,6 +452,7 @@ export default function App() {
             if (basePatch && isMounted) {
               setPatch(basePatch);
               setBaselinePatch(basePatch);
+              globalAudioEngine.updateParameters(basePatch);
             }
             if (baseMetrics && isMounted) {
               setMetrics(baseMetrics);
@@ -451,17 +464,6 @@ export default function App() {
         } catch (err) {
           console.warn('Initial native state restoration note:', err);
         }
-      }
-
-      // Web Browser Fallback: ONLY run when NOT in native plugin environment
-      if (!pluginBridge.isNativeEnvironment() && !initialLoadDone.current && samplePresets.length >= 2 && isMounted) {
-        initialLoadDone.current = true;
-        loadSlotA(samplePresets[0].dataUrl, samplePresets[0].title, samplePresets[0].id).then(() => {
-          if (isMounted) {
-            loadSlotB(samplePresets[1].dataUrl, samplePresets[1].title, samplePresets[1].id);
-          }
-        });
-        setSelectedPresetId(samplePresets[0].id);
       }
     })();
 
@@ -489,7 +491,7 @@ export default function App() {
       unsubParam();
       unsubBpm();
     };
-  }, [processImageSourceToData, loadSlotA, loadSlotB, samplePresets]);
+  }, []);
 
   // Morph slider change handler
   const handleMorphChange = useCallback(
@@ -585,6 +587,35 @@ export default function App() {
 
     const factoryMatch = samplePresets.find((p) => p.id === presetId);
     if (factoryMatch) {
+      if (factoryMatch.customPatch && factoryMatch.customMetrics && factoryMatch.dataUrl) {
+        const newSlotA: SlotData = {
+          id: factoryMatch.id,
+          title: factoryMatch.title,
+          dataUrl: factoryMatch.dataUrl,
+          metrics: factoryMatch.customMetrics,
+          patch: factoryMatch.customPatch,
+        };
+        setSlotA(newSlotA);
+        setImagePreviewUrl(factoryMatch.dataUrl);
+        pluginBridge.syncSlotImage('A', factoryMatch.dataUrl, factoryMatch.title);
+
+        if (slotB) {
+          const morphedP = interpolatePatchParameters(newSlotA.patch, slotB.patch, morphValue);
+          const morphedM = interpolateImageMetrics(newSlotA.metrics, slotB.metrics, morphValue);
+          setPatch(morphedP);
+          setBaselinePatch(morphedP);
+          setMetrics(morphedM);
+          globalAudioEngine.updateParameters(morphedP);
+          pluginBridge.syncFullPatch(morphedP, morphedM);
+        } else {
+          setPatch(factoryMatch.customPatch);
+          setBaselinePatch(factoryMatch.customPatch);
+          setMetrics(factoryMatch.customMetrics);
+          globalAudioEngine.updateParameters(factoryMatch.customPatch);
+          pluginBridge.syncFullPatch(factoryMatch.customPatch, factoryMatch.customMetrics);
+        }
+        return;
+      }
       loadSlotA(factoryMatch.dataUrl, factoryMatch.title, factoryMatch.id);
     }
   };
@@ -600,6 +631,8 @@ export default function App() {
         patch: userMatch.customPatch,
       };
       setSlotB(newSlotB);
+      pluginBridge.syncSlotImage('B', userMatch.dataUrl, userMatch.title);
+
       if (slotA) {
         const morphedP = interpolatePatchParameters(slotA.patch, newSlotB.patch, morphValue);
         const morphedM = interpolateImageMetrics(slotA.metrics, newSlotB.metrics, morphValue);
@@ -614,6 +647,28 @@ export default function App() {
 
     const factoryMatch = samplePresets.find((p) => p.id === presetId);
     if (factoryMatch) {
+      if (factoryMatch.customPatch && factoryMatch.customMetrics && factoryMatch.dataUrl) {
+        const newSlotB: SlotData = {
+          id: factoryMatch.id,
+          title: factoryMatch.title,
+          dataUrl: factoryMatch.dataUrl,
+          metrics: factoryMatch.customMetrics,
+          patch: factoryMatch.customPatch,
+        };
+        setSlotB(newSlotB);
+        pluginBridge.syncSlotImage('B', factoryMatch.dataUrl, factoryMatch.title);
+
+        if (slotA) {
+          const morphedP = interpolatePatchParameters(slotA.patch, newSlotB.patch, morphValue);
+          const morphedM = interpolateImageMetrics(slotA.metrics, newSlotB.metrics, morphValue);
+          setPatch(morphedP);
+          setBaselinePatch(morphedP);
+          setMetrics(morphedM);
+          globalAudioEngine.updateParameters(morphedP);
+          pluginBridge.syncFullPatch(morphedP, morphedM);
+        }
+        return;
+      }
       loadSlotB(factoryMatch.dataUrl, factoryMatch.title, factoryMatch.id);
     }
   };

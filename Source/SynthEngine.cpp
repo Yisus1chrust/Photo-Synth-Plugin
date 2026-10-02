@@ -10,6 +10,7 @@
 
 SynthVoice::SynthVoice()
 {
+    prepare(44100.0, 512);
 }
 
 bool SynthVoice::canPlaySound(juce::SynthesiserSound* sound)

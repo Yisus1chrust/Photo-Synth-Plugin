@@ -372,18 +372,22 @@ void PhotoSynthAudioProcessor::syncSlotImageFromFrontend(const juce::String& slo
 
 void PhotoSynthAudioProcessor::noteOn(int midiNoteNumber, float velocity)
 {
+    float vel = juce::jlimit(0.05f, 1.0f, velocity);
+    synth.noteOn(1, midiNoteNumber, vel);
     const juce::ScopedLock sl(midiLock);
-    internalMidiBuffer.addEvent(juce::MidiMessage::noteOn(1, midiNoteNumber, velocity), 0);
+    internalMidiBuffer.addEvent(juce::MidiMessage::noteOn(1, midiNoteNumber, vel), 0);
 }
 
 void PhotoSynthAudioProcessor::noteOff(int midiNoteNumber)
 {
+    synth.noteOff(1, midiNoteNumber, 0.0f, true);
     const juce::ScopedLock sl(midiLock);
     internalMidiBuffer.addEvent(juce::MidiMessage::noteOff(1, midiNoteNumber), 0);
 }
 
 void PhotoSynthAudioProcessor::allNotesOff()
 {
+    synth.allNotesOff(1, true);
     const juce::ScopedLock sl(midiLock);
     internalMidiBuffer.addEvent(juce::MidiMessage::allNotesOff(1), 0);
 }
@@ -405,7 +409,7 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     {
         const juce::ScopedLock sl(midiLock);
         if (!internalMidiBuffer.isEmpty()) {
-            midiMessages.addEvents(internalMidiBuffer, 0, buffer.getNumSamples(), 0);
+            midiMessages.addEvents(internalMidiBuffer, 0, -1, 0);
             internalMidiBuffer.clear();
         }
     }
@@ -478,13 +482,33 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     float masterGain = juce::Decibels::decibelsToGain(volDb, -60.0f) * 0.95f;
     buffer.applyGain(masterGain);
 
-    // Apply Limiter
+    // Apply Limiter / Soft-clipping (1:1 with WebAudio dynamics compressor & limiter)
     if (*apvts.getRawParameterValue("limiter") > 0.5f) {
         float thresholdDb = *apvts.getRawParameterValue("threshold");
-        masterLimiter.setThreshold(thresholdDb);
-        juce::dsp::AudioBlock<float> block(buffer);
-        juce::dsp::ProcessContextReplacing<float> context(block);
-        masterLimiter.process(context);
+        float thresholdLinear = juce::Decibels::decibelsToGain(thresholdDb);
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+            auto* channelData = buffer.getWritePointer(ch);
+            for (int i = 0; i < buffer.getNumSamples(); ++i) {
+                float sample = channelData[i];
+                if (!std::isfinite(sample)) {
+                    sample = 0.0f;
+                } else if (std::abs(sample) > thresholdLinear) {
+                    float sign = sample > 0.0f ? 1.0f : -1.0f;
+                    float excess = std::abs(sample) - thresholdLinear;
+                    sample = sign * (thresholdLinear + std::tanh(excess * 0.7f) * (1.0f - thresholdLinear));
+                }
+                channelData[i] = juce::jlimit(-1.0f, 1.0f, sample);
+            }
+        }
+    } else {
+        // Basic safety clamping
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+            auto* channelData = buffer.getWritePointer(ch);
+            for (int i = 0; i < buffer.getNumSamples(); ++i) {
+                if (!std::isfinite(channelData[i])) channelData[i] = 0.0f;
+                else channelData[i] = juce::jlimit(-1.0f, 1.0f, channelData[i]);
+            }
+        }
     }
 
     // Capture to oscilloscope FIFO

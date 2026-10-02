@@ -1,4 +1,75 @@
-import { PresetPhoto } from '../types/synth';
+import { PresetPhoto, ImageMetrics, PatchParameters, createDefaultEffects } from '../types/synth';
+
+// Standard Factory Presets Metrics & Patches for instantaneous, zero-delay rendering
+export const SYNTHWAVE_SUNSET_METRICS: ImageMetrics = {
+  hash64: '0x3F8A91C2E0B54719',
+  seedNumber: 4578619374029175481n,
+  brightness: 0.45,
+  saturation: 0.83,
+  complexity: 0.52,
+  timbreDna: 0.88,
+  dominantHue: 88,
+  archetype: 'analog_brass',
+  colorPalette: ['#110022', '#ff0055', '#ffaa00', '#ffff00', '#00ffff'],
+};
+
+export const SYNTHWAVE_SUNSET_PATCH: PatchParameters = {
+  cutoffOffset: 2400,
+  resonance: 1.8,
+  lfoRate: 2.4,
+  lfoDepth: 0.35,
+  masterVolume: 0.0,
+  attackTime: 0.015,
+  decayTime: 0.8,
+  sustainLevel: 0.75,
+  releaseTime: 0.45,
+  limiterEnabled: true,
+  threshold: -3.0,
+  engineType: 'analog_brass',
+  detuneCents: 12,
+  unisonVoices: 3,
+  fmRatio: 2.0,
+  fmAmount: 0.0,
+  subOscLevel: 0.35,
+  reverbMix: 0.30,
+  delayMix: 0.25,
+  effects: createDefaultEffects(),
+};
+
+export const OBSIDIAN_CRYPT_METRICS: ImageMetrics = {
+  hash64: '0x1A2B3C4D5E6F7081',
+  seedNumber: 1885694291850284929n,
+  brightness: 0.31,
+  saturation: 0.51,
+  complexity: 0.09,
+  timbreDna: 0.09,
+  dominantHue: 9,
+  archetype: 'digital_fm_bells',
+  colorPalette: ['#020305', '#0b0e14', '#1a2238', '#64b4ff', '#182438'],
+};
+
+export const OBSIDIAN_CRYPT_PATCH: PatchParameters = {
+  cutoffOffset: 1600,
+  resonance: 2.2,
+  lfoRate: 1.5,
+  lfoDepth: 0.25,
+  masterVolume: 0.0,
+  attackTime: 0.02,
+  decayTime: 1.2,
+  sustainLevel: 0.50,
+  releaseTime: 0.80,
+  limiterEnabled: true,
+  threshold: -3.0,
+  engineType: 'digital_fm_bells',
+  detuneCents: 8,
+  unisonVoices: 2,
+  fmRatio: 3.5,
+  fmAmount: 0.45,
+  subOscLevel: 0.20,
+  reverbMix: 0.45,
+  delayMix: 0.20,
+  effects: createDefaultEffects(),
+};
 
 // Helper to generate a colorful procedural canvas image data URL
 function createProceduralImageDataUrl(
@@ -7,14 +78,19 @@ function createProceduralImageDataUrl(
   renderFn: (ctx: CanvasRenderingContext2D, w: number, h: number) => void
 ): string {
   if (typeof document === 'undefined') return '';
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    renderFn(ctx, width, height);
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      renderFn(ctx, width, height);
+      return canvas.toDataURL('image/png');
+    }
+  } catch (err) {
+    console.error('Failed to create procedural canvas image:', err);
   }
-  return canvas.toDataURL('image/png');
+  return '';
 }
 
 export function getSamplePresetPhotos(): PresetPhoto[] {
@@ -24,6 +100,8 @@ export function getSamplePresetPhotos(): PresetPhoto[] {
       title: 'Synthwave Sunset',
       description: 'High contrast, saturated neon gradients triggering Jump-style analog brass stack.',
       category: 'Analog Brass',
+      customMetrics: SYNTHWAVE_SUNSET_METRICS,
+      customPatch: SYNTHWAVE_SUNSET_PATCH,
       dataUrl: createProceduralImageDataUrl(400, 300, (ctx, w, h) => {
         // Vibrant grid + neon sun gradient
         const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -37,7 +115,7 @@ export function getSamplePresetPhotos(): PresetPhoto[] {
         const sunGrad = ctx.createRadialGradient(w / 2, h * 0.45, 10, w / 2, h * 0.45, 90);
         sunGrad.addColorStop(0, '#ffff00');
         sunGrad.addColorStop(0.8, '#ff00aa');
-        sunGrad.addColorStop(1, 'transparent');
+        sunGrad.addColorStop(1, 'rgba(255, 0, 170, 0)');
         ctx.fillStyle = sunGrad;
         ctx.beginPath();
         ctx.arc(w / 2, h * 0.45, 90, 0, Math.PI * 2);
@@ -65,6 +143,8 @@ export function getSamplePresetPhotos(): PresetPhoto[] {
       title: 'Obsidian Crypt',
       description: 'Low-light, dark desaturated scene triggering Little Dark Age glassy FM bells.',
       category: 'FM / Wavetable',
+      customMetrics: OBSIDIAN_CRYPT_METRICS,
+      customPatch: OBSIDIAN_CRYPT_PATCH,
       dataUrl: createProceduralImageDataUrl(400, 300, (ctx, w, h) => {
         // Dark moody background
         const grad = ctx.createRadialGradient(w / 2, h / 2, 20, w / 2, h / 2, 220);

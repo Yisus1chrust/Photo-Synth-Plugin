@@ -195,6 +195,21 @@ private:
     juce::ComboBox filterTypeBox, waveShapeBox;
     VirtualPianoKeyboard pianoKeyboard;
     bool showPiano { true };
+
+    // APVTS Attachments ensuring all UI controls maintain 1:1 sync with host & DAW state
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutoffAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> resAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driveAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> decAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> susAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> relAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> volAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> limiterAttachment;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhotoSynthAudioEditor)
 };
 

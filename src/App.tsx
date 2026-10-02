@@ -342,11 +342,13 @@ export default function App() {
     if (initialLoadDone.current) return;
     initialLoadDone.current = true;
 
-    // Immediately prime audio engine with default Synthwave Sunset patch
+    // Immediately prime WebAudio engine with default Synthwave Sunset patch
     globalAudioEngine.updateParameters(defaultSlotA.patch);
-    pluginBridge.syncFullPatch(defaultSlotA.patch, defaultSlotA.metrics);
-    pluginBridge.syncSlotImage('A', defaultSlotA.dataUrl, defaultSlotA.title);
-    pluginBridge.syncSlotImage('B', defaultSlotB.dataUrl, defaultSlotB.title);
+    if (!pluginBridge.isNativeEnvironment()) {
+      pluginBridge.syncFullPatch(defaultSlotA.patch, defaultSlotA.metrics);
+      pluginBridge.syncSlotImage('A', defaultSlotA.dataUrl, defaultSlotA.title);
+      pluginBridge.syncSlotImage('B', defaultSlotB.dataUrl, defaultSlotB.title);
+    }
 
     (async () => {
       await pluginBridge.initNativeBridge();

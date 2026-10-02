@@ -22,6 +22,10 @@ struct VoiceParams
     float lfoRate { 2.0f };
     float lfoDepth { 0.2f };
     float drive { 0.0f };
+    float color { 88.0f };         // 0 to 360 degrees
+    float brightness { 45.0f };    // 0 to 100
+    float saturation { 83.0f };    // 0 to 100
+    float complexity { 52.0f };    // 0 to 100
     SynthArchetype archetype { SynthArchetype::AnalogBrass };
     TemporalEra era { TemporalEra::Era1970s };
 };
@@ -45,6 +49,7 @@ public:
 private:
     double currentSampleRate { 44100.0 };
     float currentPitchHz { 440.0f };
+    float phaseIncrement { 0.0f };
     float currentVelocity { 0.8f };
     VoiceParams currentParams;
 

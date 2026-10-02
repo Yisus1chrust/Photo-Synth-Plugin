@@ -90,6 +90,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout PhotoSynthAudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "archetype", 1 }, "Synth Archetype", juce::NormalisableRange<float> (0.0f, 2.0f, 1.0f), 0.0f));
 
+    // Timbre DNA & Visual Sound Shaping Parameters (Color, Brightness, Saturation, Complexity)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "color", 1 }, "Color (Hue)", juce::NormalisableRange<float> (0.0f, 360.0f, 1.0f), 88.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "brightness", 1 }, "Brightness", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 45.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "saturation", 1 }, "Saturation", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 83.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "complexity", 1 }, "Complexity", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 52.0f));
+
     // Effects: Delay
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "delayEnabled", 1 }, "Delay Enabled", true));
@@ -189,18 +202,23 @@ void PhotoSynthAudioProcessor::applyAnalysisToParameters(const ImageAnalysisResu
         }
     };
 
-    setParam("cutoff",    analysis.cutoff);
-    setParam("resonance", analysis.resonance);
-    setParam("lfoRate",   analysis.lfoRate);
-    setParam("lfoDepth",  analysis.lfoDepth);
-    setParam("attack",    analysis.attack);
-    setParam("decay",     analysis.decay);
-    setParam("sustain",   analysis.sustain);
-    setParam("release",   analysis.release);
-    setParam("drive",     analysis.drive);
-    setParam("delayMix",  analysis.delayMix);
-    setParam("reverbMix", analysis.reverbMix);
-    setParam("archetype", (float)analysis.archetype);
+    setParam("cutoff",     analysis.cutoff);
+    setParam("resonance",  analysis.resonance);
+    setParam("lfoRate",    analysis.lfoRate);
+    setParam("lfoDepth",   analysis.lfoDepth);
+    setParam("attack",     analysis.attack);
+    setParam("decay",      analysis.decay);
+    setParam("sustain",    analysis.sustain);
+    setParam("release",    analysis.release);
+    setParam("drive",      analysis.drive);
+    setParam("delayMix",   analysis.delayMix);
+    setParam("reverbMix",  analysis.reverbMix);
+    setParam("archetype",  (float)analysis.archetype);
+
+    setParam("color",      analysis.timbreDna * 360.0f);
+    setParam("brightness", analysis.brightness * 100.0f);
+    setParam("saturation", analysis.saturation * 100.0f);
+    setParam("complexity", analysis.complexity * 100.0f);
 }
 
 void PhotoSynthAudioProcessor::updateParametersFromAnalysis()
@@ -417,16 +435,37 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     updateMorphState();
 
     VoiceParams p;
-    p.cutoff    = *apvts.getRawParameterValue("cutoff");
-    p.resonance = *apvts.getRawParameterValue("resonance");
-    p.lfoRate   = *apvts.getRawParameterValue("lfoRate");
-    p.lfoDepth  = *apvts.getRawParameterValue("lfoDepth");
-    p.attack    = *apvts.getRawParameterValue("attack");
-    p.decay     = *apvts.getRawParameterValue("decay");
-    p.sustain   = *apvts.getRawParameterValue("sustain");
-    p.release   = *apvts.getRawParameterValue("release");
-    p.drive     = *apvts.getRawParameterValue("drive");
-    float archVal = *apvts.getRawParameterValue("archetype");
+    p.cutoff    = apvts.getRawParameterValue("cutoff")->load();
+    p.resonance = apvts.getRawParameterValue("resonance")->load();
+    p.lfoRate   = apvts.getRawParameterValue("lfoRate")->load();
+    p.lfoDepth  = apvts.getRawParameterValue("lfoDepth")->load();
+    p.attack    = apvts.getRawParameterValue("attack")->load();
+    p.decay     = apvts.getRawParameterValue("decay")->load();
+    p.sustain   = apvts.getRawParameterValue("sustain")->load();
+    p.release   = apvts.getRawParameterValue("release")->load();
+    p.drive     = apvts.getRawParameterValue("drive")->load();
+
+    if (auto* cp = apvts.getRawParameterValue("color"))
+        p.color = cp->load();
+    else
+        p.color = currentAnalysis.timbreDna * 360.0f;
+
+    if (auto* bp = apvts.getRawParameterValue("brightness"))
+        p.brightness = bp->load();
+    else
+        p.brightness = currentAnalysis.brightness * 100.0f;
+
+    if (auto* sp = apvts.getRawParameterValue("saturation"))
+        p.saturation = sp->load();
+    else
+        p.saturation = currentAnalysis.saturation * 100.0f;
+
+    if (auto* cxp = apvts.getRawParameterValue("complexity"))
+        p.complexity = cxp->load();
+    else
+        p.complexity = currentAnalysis.complexity * 100.0f;
+
+    float archVal = apvts.getRawParameterValue("archetype")->load();
     int archInt = (int)std::round(archVal);
     if (archInt == 1) p.archetype = SynthArchetype::DigitalFmBells;
     else if (archInt == 2) p.archetype = SynthArchetype::HybridWavetable;
@@ -444,47 +483,47 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     // Update and process Audio Effects Chain
     photosynth::EffectsParameters fxParams;
-    fxParams.delayEnabled       = *apvts.getRawParameterValue("delayEnabled") > 0.5f;
-    fxParams.delayTimeMs        = *apvts.getRawParameterValue("delayTime");
-    fxParams.delayFeedback      = *apvts.getRawParameterValue("delayFeedback");
-    fxParams.delayMix           = juce::jlimit(0.0f, 1.0f, *apvts.getRawParameterValue("delayMix") * (0.6f + currentAnalysis.delayMix * 0.8f));
+    fxParams.delayEnabled       = apvts.getRawParameterValue("delayEnabled")->load() > 0.5f;
+    fxParams.delayTimeMs        = apvts.getRawParameterValue("delayTime")->load();
+    fxParams.delayFeedback      = apvts.getRawParameterValue("delayFeedback")->load();
+    fxParams.delayMix           = juce::jlimit(0.0f, 1.0f, apvts.getRawParameterValue("delayMix")->load() * (0.6f + currentAnalysis.delayMix * 0.8f));
 
-    fxParams.reverbEnabled      = *apvts.getRawParameterValue("reverbEnabled") > 0.5f;
-    fxParams.reverbRoomSize     = *apvts.getRawParameterValue("reverbSize");
-    fxParams.reverbDecaySec     = *apvts.getRawParameterValue("reverbDecay");
-    fxParams.reverbMix          = juce::jlimit(0.0f, 1.0f, *apvts.getRawParameterValue("reverbMix") * (0.6f + currentAnalysis.reverbMix * 0.8f));
+    fxParams.reverbEnabled      = apvts.getRawParameterValue("reverbEnabled")->load() > 0.5f;
+    fxParams.reverbRoomSize     = apvts.getRawParameterValue("reverbSize")->load();
+    fxParams.reverbDecaySec     = apvts.getRawParameterValue("reverbDecay")->load();
+    fxParams.reverbMix          = juce::jlimit(0.0f, 1.0f, apvts.getRawParameterValue("reverbMix")->load() * (0.6f + currentAnalysis.reverbMix * 0.8f));
 
-    fxParams.chorusEnabled      = *apvts.getRawParameterValue("chorusEnabled") > 0.5f;
-    fxParams.chorusRateHz       = *apvts.getRawParameterValue("chorusRate");
-    fxParams.chorusDepth        = *apvts.getRawParameterValue("chorusDepth");
-    fxParams.chorusMix          = *apvts.getRawParameterValue("chorusMix");
+    fxParams.chorusEnabled      = apvts.getRawParameterValue("chorusEnabled")->load() > 0.5f;
+    fxParams.chorusRateHz       = apvts.getRawParameterValue("chorusRate")->load();
+    fxParams.chorusDepth        = apvts.getRawParameterValue("chorusDepth")->load();
+    fxParams.chorusMix          = apvts.getRawParameterValue("chorusMix")->load();
 
-    fxParams.phaserEnabled      = *apvts.getRawParameterValue("phaserEnabled") > 0.5f;
-    fxParams.phaserRateHz       = *apvts.getRawParameterValue("phaserRate");
-    fxParams.phaserDepth        = *apvts.getRawParameterValue("phaserDepth");
-    fxParams.phaserFeedback     = *apvts.getRawParameterValue("phaserFeedback");
-    fxParams.phaserMix          = *apvts.getRawParameterValue("phaserMix");
+    fxParams.phaserEnabled      = apvts.getRawParameterValue("phaserEnabled")->load() > 0.5f;
+    fxParams.phaserRateHz       = apvts.getRawParameterValue("phaserRate")->load();
+    fxParams.phaserDepth        = apvts.getRawParameterValue("phaserDepth")->load();
+    fxParams.phaserFeedback     = apvts.getRawParameterValue("phaserFeedback")->load();
+    fxParams.phaserMix          = apvts.getRawParameterValue("phaserMix")->load();
 
-    fxParams.flangerEnabled     = *apvts.getRawParameterValue("flangerEnabled") > 0.5f;
-    fxParams.flangerRateHz      = *apvts.getRawParameterValue("flangerRate");
-    fxParams.flangerDepth       = *apvts.getRawParameterValue("flangerDepth");
-    fxParams.flangerMix         = *apvts.getRawParameterValue("flangerMix");
+    fxParams.flangerEnabled     = apvts.getRawParameterValue("flangerEnabled")->load() > 0.5f;
+    fxParams.flangerRateHz      = apvts.getRawParameterValue("flangerRate")->load();
+    fxParams.flangerDepth       = apvts.getRawParameterValue("flangerDepth")->load();
+    fxParams.flangerMix         = apvts.getRawParameterValue("flangerMix")->load();
 
-    fxParams.distortionEnabled  = *apvts.getRawParameterValue("distortionEnabled") > 0.5f;
-    fxParams.distortionDrive    = *apvts.getRawParameterValue("distortionDrive");
-    fxParams.distortionMix      = *apvts.getRawParameterValue("distortionMix");
+    fxParams.distortionEnabled  = apvts.getRawParameterValue("distortionEnabled")->load() > 0.5f;
+    fxParams.distortionDrive    = apvts.getRawParameterValue("distortionDrive")->load();
+    fxParams.distortionMix      = apvts.getRawParameterValue("distortionMix")->load();
 
     effectsChain.updateParameters(fxParams);
     effectsChain.processBlock(buffer);
 
     // Apply master volume gain
-    float volDb = *apvts.getRawParameterValue("volume");
+    float volDb = apvts.getRawParameterValue("volume")->load();
     float masterGain = juce::Decibels::decibelsToGain(volDb, -60.0f) * 0.95f;
     buffer.applyGain(masterGain);
 
     // Apply Limiter / Soft-clipping (1:1 with WebAudio dynamics compressor & limiter)
-    if (*apvts.getRawParameterValue("limiter") > 0.5f) {
-        float thresholdDb = *apvts.getRawParameterValue("threshold");
+    if (apvts.getRawParameterValue("limiter")->load() > 0.5f) {
+        float thresholdDb = apvts.getRawParameterValue("threshold")->load();
         float thresholdLinear = juce::Decibels::decibelsToGain(thresholdDb);
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
             auto* channelData = buffer.getWritePointer(ch);
@@ -719,8 +758,14 @@ void PhotoSynthAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 void PhotoSynthAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
-    if (xmlState.get() != nullptr && xmlState->hasTagName (apvts.state.getType())) {
-        apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+    if (xmlState.get() != nullptr) {
+        if (xmlState->hasTagName (apvts.state.getType())) {
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+        } else if (auto* stateChild = xmlState->getChildByName (apvts.state.getType().toString())) {
+            apvts.replaceState (juce::ValueTree::fromXml (*stateChild));
+        } else {
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+        }
 
         if (xmlState->hasAttribute("slotAName"))
             slotAName = xmlState->getStringAttribute("slotAName");

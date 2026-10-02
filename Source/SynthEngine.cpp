@@ -62,12 +62,15 @@ void SynthVoice::updatePatch(const VoiceParams& params)
     filterEnv.setParameters(fParams);
 }
 
-void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int)
+void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int /*currentPitchWheelPosition*/)
 {
-    currentVelocity = juce::jlimit(0.1f, 1.0f, velocity);
+    currentVelocity = juce::jlimit(0.05f, 1.0f, velocity);
     currentPitchHz = (float)juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
 
-    // Keep oscillator phases continuous/smooth to prevent comb-filtering laser clicks on attack
+    float sr = (float)(currentSampleRate > 1000.0 ? currentSampleRate : 44100.0);
+    phaseIncrement = currentPitchHz / sr;
+
+    // Reset modulation phase for punchy transient attack
     phaseMod = 0.0f;
     lfoPhase = 0.0f;
     filterS1[0] = filterS1[1] = 0.0f;
@@ -77,7 +80,7 @@ void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::Synthesiser
     filterEnv.noteOn();
 }
 
-void SynthVoice::stopNote(float, bool allowTailOff)
+void SynthVoice::stopNote(float /*velocity*/, bool allowTailOff)
 {
     if (allowTailOff) {
         ampEnv.noteOff();
@@ -128,19 +131,35 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
     int numChannels = outputBuffer.getNumChannels();
     if (numChannels == 0 || numSamples == 0) return;
 
-    // Detune ratios: +/- 8.5 cents detune, and sub-oscillator 1 octave below
-    float detuneDown = std::pow(2.0f, -8.5f / 1200.0f);
-    float detuneUp   = std::pow(2.0f,  8.5f / 1200.0f);
+    float sr = (float)(currentSampleRate > 1000.0 ? currentSampleRate : 44100.0);
+    phaseIncrement = currentPitchHz / sr;
 
-    float inc1   = (currentPitchHz * detuneDown) / (float)currentSampleRate;
-    float inc2   = (currentPitchHz * detuneUp)   / (float)currentSampleRate;
-    float incSub = (currentPitchHz * 0.5f)       / (float)currentSampleRate; // 1 octave below
-    float incMod = (currentPitchHz * 2.0f)       / (float)currentSampleRate;
-    float lfoInc = (float)(2.0 * juce::MathConstants<double>::pi * currentParams.lfoRate / currentSampleRate);
+    // 1. Color / Timbre DNA Parameter (0.0 to 1.0 or 0 to 360 deg)
+    // Directly modulates harmonic unison detune spread & spectral balance
+    float normColor = juce::jlimit(0.0f, 1.0f, currentParams.color > 1.0f ? currentParams.color / 360.0f : currentParams.color);
+    float detuneSpreadCents = 5.0f + normColor * 25.0f; // 5 to 30 cents detune spread
+    float detuneDown = std::pow(2.0f, -detuneSpreadCents / 1200.0f);
+    float detuneUp   = std::pow(2.0f,  detuneSpreadCents / 1200.0f);
 
-    // SVF Filter parameters: directly from analyzed/overridden cutoff
-    float baseCutoff = juce::jlimit(80.0f, 19500.0f, currentParams.cutoff);
-    float q = juce::jlimit(0.5f, 7.5f, currentParams.resonance);
+    float inc1   = phaseIncrement * detuneDown;
+    float inc2   = phaseIncrement * detuneUp;
+    float incSub = phaseIncrement * 0.5f; // 1 octave below
+
+    // 2. Complexity Parameter (0 to 100): scales FM modulation depth and overtone ratios
+    float normComplexity = juce::jlimit(0.0f, 1.0f, currentParams.complexity > 1.0f ? currentParams.complexity / 100.0f : currentParams.complexity);
+    float modRatio = 1.0f + std::round(normColor * 3.0f) + (normComplexity > 0.5f ? 1.0f : 0.0f);
+    float incMod = phaseIncrement * modRatio;
+    float lfoInc = (float)(2.0 * juce::MathConstants<double>::pi * currentParams.lfoRate / sr);
+
+    // 3. Brightness Parameter (0 to 100): dynamically scales base filter cutoff frequency
+    float normBrightness = juce::jlimit(0.0f, 1.0f, currentParams.brightness > 1.0f ? currentParams.brightness / 100.0f : currentParams.brightness);
+    float brightnessCutoffScale = 0.35f + normBrightness * 1.65f;
+    float baseCutoff = juce::jlimit(40.0f, 19500.0f, currentParams.cutoff * brightnessCutoffScale);
+    float q = juce::jlimit(0.5f, 8.5f, currentParams.resonance);
+
+    // 4. Saturation Parameter (0 to 100): analog warmth and saturation drive
+    float normSaturation = juce::jlimit(0.0f, 1.0f, currentParams.saturation > 1.0f ? currentParams.saturation / 100.0f : currentParams.saturation);
+    float effectiveDrive = juce::jlimit(0.0f, 1.0f, currentParams.drive + normSaturation * 0.60f);
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -156,7 +175,7 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         if (lfoPhase > juce::MathConstants<float>::twoPi)
             lfoPhase -= juce::MathConstants<float>::twoPi;
 
-        // Render stereo oscillator waveforms according to archetype (1:1 with WebAudioEngine prototype)
+        // Render stereo oscillator waveforms according to archetype
         float oscSampleL = 0.0f;
         float oscSampleR = 0.0f;
 
@@ -167,13 +186,15 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
             float sawR = getBlepSaw(phase2, inc2);
             float subSaw = getBlepSaw(phaseSub, inc1 * 1.003f);
 
-            oscSampleL = sawL * 0.50f + sawR * 0.25f + subSaw * 0.25f;
-            oscSampleR = sawL * 0.25f + sawR * 0.50f + subSaw * 0.25f;
+            float subMix = 0.15f + normComplexity * 0.30f;
+            oscSampleL = sawL * 0.50f + sawR * 0.25f + subSaw * subMix;
+            oscSampleR = sawL * 0.25f + sawR * 0.50f + subSaw * subMix;
         }
         else if (currentParams.archetype == SynthArchetype::DigitalFmBells)
         {
-            // 2-Op Crystalline FM Bells with sub-octave support
-            float mod = std::sin(phaseMod * juce::MathConstants<float>::twoPi) * (1.0f + fEnv * 2.5f);
+            // 2-Op Crystalline FM Bells with complexity-driven modulation depth
+            float fmIndex = (1.0f + fEnv * 2.5f) * (0.5f + normComplexity * 1.5f);
+            float mod = std::sin(phaseMod * juce::MathConstants<float>::twoPi) * fmIndex;
             float carrierL = std::sin((phase1 + mod * 0.25f) * juce::MathConstants<float>::twoPi);
             float carrierR = std::sin((phase2 + mod * 0.25f) * juce::MathConstants<float>::twoPi);
             float bellSub  = getBlepSquare(phaseSub, incSub);
@@ -183,13 +204,14 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         }
         else
         {
-            // Hybrid Wavetable (1:1 with prototype): Bandlimited Saw + Detuned Square + Sub-Octave Square
+            // Hybrid Wavetable: Bandlimited Saw + Detuned Square + Sub-Octave Square
             float saw1   = getBlepSaw(phase1, inc1);
             float sqr2   = getBlepSquare(phase2, inc2);
             float subSqr = getBlepSquare(phaseSub, incSub);
 
-            oscSampleL = saw1 * 0.45f + sqr2 * 0.35f + subSqr * 0.25f;
-            oscSampleR = saw1 * 0.35f + sqr2 * 0.45f + subSqr * 0.25f;
+            float sqrMix = 0.25f + normComplexity * 0.25f;
+            oscSampleL = saw1 * 0.50f + sqr2 * sqrMix + subSqr * 0.20f;
+            oscSampleR = saw1 * 0.40f + sqr2 * (sqrMix + 0.10f) + subSqr * 0.20f;
         }
 
         // Advance oscillator phases
@@ -202,10 +224,10 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         phaseMod += incMod;
         if (phaseMod >= 1.0f) phaseMod -= 1.0f;
 
-        // Apply dynamic cutoff modulation with filter envelope & LFO (musical & open)
-        float maxAllowedCutoff = std::min(19500.0f, (float)currentSampleRate * 0.45f);
+        // Apply dynamic cutoff modulation with filter envelope & LFO
+        float maxAllowedCutoff = std::min(19500.0f, sr * 0.45f);
         float modCutoff = juce::jlimit(40.0f, maxAllowedCutoff, baseCutoff * (0.85f + fEnv * 0.35f) * (1.0f + lfoVal * 0.20f));
-        float g = std::tan(juce::MathConstants<float>::pi * modCutoff / (float)currentSampleRate);
+        float g = std::tan(juce::MathConstants<float>::pi * modCutoff / sr);
         float k = 1.0f / q;
         float a1 = 1.0f / (1.0f + g * (g + k));
         float a2 = g * a1;
@@ -236,8 +258,8 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         float sampleR = outR * voiceGain;
 
         // Soft saturation drive (hyperbolic tangent curve matching Web Prototype)
-        if (currentParams.drive > 0.01f) {
-            float driveAmount = 1.0f + currentParams.drive * 3.5f;
+        if (effectiveDrive > 0.01f) {
+            float driveAmount = 1.0f + effectiveDrive * 3.5f;
             sampleL = std::tanh(sampleL * driveAmount) / std::tanh(driveAmount);
             sampleR = std::tanh(sampleR * driveAmount) / std::tanh(driveAmount);
         }

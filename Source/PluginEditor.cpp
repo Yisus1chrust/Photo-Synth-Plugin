@@ -217,6 +217,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 "cutoff", "resonance", "lfoRate", "lfoDepth",
                 "volume", "attack", "decay", "sustain", "release",
                 "morph", "limiter", "threshold", "drive", "archetype",
+                "color", "brightness", "saturation", "complexity",
                 "delayEnabled", "delayTime", "delayFeedback", "delayMix",
                 "reverbEnabled", "reverbSize", "reverbDecay", "reverbMix",
                 "chorusEnabled", "chorusRate", "chorusDepth", "chorusMix",
@@ -683,6 +684,19 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p), pianoKeyboard(p)
 {
     setSize(1080, 800);
+
+    cutoffAttachment   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "cutoff", cutoffKnob);
+    resAttachment      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "resonance", resKnob);
+    driveAttachment    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "drive", driveKnob);
+    lfoRateAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "lfoRate", lfoRateKnob);
+    lfoDepthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "lfoDepth", lfoDepthKnob);
+    attAttachment      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "attack", attKnob);
+    decAttachment      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "decay", decKnob);
+    susAttachment      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "sustain", susKnob);
+    relAttachment      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "release", relKnob);
+    volAttachment      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "volume", volKnob);
+    morphAttachment    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "morph", morphSlider);
+    limiterAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts, "limiter", limiterToggle);
 }
 
 PhotoSynthAudioEditor::~PhotoSynthAudioEditor() = default;

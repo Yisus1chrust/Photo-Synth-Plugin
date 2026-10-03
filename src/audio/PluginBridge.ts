@@ -414,6 +414,10 @@ class HybridPluginBridge {
       volume: patch.masterVolume ?? -3.0,
       threshold: patch.threshold ?? -3.0,
       archetype: archVal,
+      color: (metrics?.timbreDna != null ? metrics.timbreDna : 0.5) * 360.0,
+      brightness: (metrics?.brightness != null ? metrics.brightness : 0.5) * 100.0,
+      saturation: (metrics?.saturation != null ? metrics.saturation : 0.5) * 100.0,
+      complexity: (metrics?.complexity != null ? metrics.complexity : 0.2) * 100.0,
     };
 
     if (patch.effects) {

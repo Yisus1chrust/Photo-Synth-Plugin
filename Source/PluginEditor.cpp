@@ -49,6 +49,9 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                 else if (paramId == "masterVolume") paramId = "volume";
                 else if (paramId == "limiterEnabled") paramId = "limiter";
 
+                if (paramId == "color" && value <= 1.0f) value *= 360.0f;
+                else if ((paramId == "brightness" || paramId == "saturation" || paramId == "complexity") && value <= 1.0f) value *= 100.0f;
+
                 if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
                     param->setValueNotifyingHost(param->convertTo0to1(value));
                 }
@@ -71,6 +74,9 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor(PhotoSynthAudioProcessor& p)
                         else if (paramId == "releaseTime") paramId = "release";
                         else if (paramId == "masterVolume") paramId = "volume";
                         else if (paramId == "limiterEnabled") paramId = "limiter";
+
+                        if (paramId == "color" && value <= 1.0f) value *= 360.0f;
+                        else if ((paramId == "brightness" || paramId == "saturation" || paramId == "complexity") && value <= 1.0f) value *= 100.0f;
 
                         if (auto* param = audioProcessor.apvts.getParameter(paramId)) {
                             param->setValueNotifyingHost(param->convertTo0to1(value));

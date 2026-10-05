@@ -1,138 +1,241 @@
+/*
+  ==============================================================================
+    PluginEditor.cpp
+    Modular Sound Technologies - Paint a Synth (Photo Synth)
+    JUCE 8 Hybrid WebView Plugin Architecture
+  ==============================================================================
+*/
+
+#include "PluginProcessor.h"
 #include "PluginEditor.h"
 
 PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p), scopeComponent (p)
+    : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    setLookAndFeel (&cyberpunkLaf);
+    // Build JUCE 8 WebBrowserComponent Options
+    auto options = juce::WebBrowserComponent::Options{}
+        .withNativeIntegrationEnabled()
+        .withUserScript ("window.__PHOTO_SYNTH_HYBRID__ = true; window.__PHOTO_SYNTH_NATIVE_HOST__ = true;")
+        .withResourceProvider ([this](const juce::String& path) {
+            return getResource (path);
+        })
+        // 1. setParameter native function (updates APVTS parameters live from React GUI)
+        .withNativeFunction ("setParameter", [this](const juce::Array<juce::var>& args, auto completion) {
+            if (args.size() >= 2) {
+                juce::String paramId = args[0].toString();
+                float value = static_cast<float>(args[1].operator double());
 
-    // Configure 4 Timbre DNA Knobs
-    configureKnob (colorSlider, colorLabel, "COLOR");
-    colorAttach = std::make_unique<Attachment> (audioProcessor.apvts, "color", colorSlider);
+                // Remap frontend names to APVTS IDs if needed
+                if (paramId == "cutoffOffset")      paramId = "cutoff";
+                else if (paramId == "attackTime")   paramId = "attack";
+                else if (paramId == "decayTime")    paramId = "decay";
+                else if (paramId == "sustainLevel") paramId = "sustain";
+                else if (paramId == "releaseTime")  paramId = "release";
+                else if (paramId == "masterVolume") paramId = "volume";
+                else if (paramId == "limiterEnabled") paramId = "limiter";
 
-    configureKnob (brightnessSlider, brightnessLabel, "BRIGHTNESS");
-    brightnessAttach = std::make_unique<Attachment> (audioProcessor.apvts, "brightness", brightnessSlider);
+                // Auto-scale normalized UI floats (0.0 - 1.0) to APVTS ranges
+                if (paramId == "color" && value <= 1.0f)
+                    value *= 360.0f;
+                else if ((paramId == "brightness" || paramId == "saturation" || paramId == "complexity") && value <= 1.0f)
+                    value *= 100.0f;
 
-    configureKnob (saturationSlider, saturationLabel, "SATURATION");
-    saturationAttach = std::make_unique<Attachment> (audioProcessor.apvts, "saturation", saturationSlider);
+                if (auto* param = audioProcessor.apvts.getParameter (paramId)) {
+                    param->setValueNotifyingHost (param->convertTo0to1 (value));
+                }
+            }
+            completion (juce::var());
+        })
+        // 2. syncPatch native function (batch parameter synchronization)
+        .withNativeFunction ("syncPatch", [this](const juce::Array<juce::var>& args, auto completion) {
+            if (args.size() >= 1 && args[0].isObject()) {
+                if (auto* obj = args[0].getDynamicObject()) {
+                    for (const auto& prop : obj->getProperties()) {
+                        juce::String paramId = prop.name.toString();
+                        float value = static_cast<float>(prop.value.operator double());
 
-    configureKnob (complexitySlider, complexityLabel, "COMPLEXITY");
-    complexityAttach = std::make_unique<Attachment> (audioProcessor.apvts, "complexity", complexitySlider);
+                        if (paramId == "cutoffOffset")      paramId = "cutoff";
+                        else if (paramId == "attackTime")   paramId = "attack";
+                        else if (paramId == "decayTime")    paramId = "decay";
+                        else if (paramId == "sustainLevel") paramId = "sustain";
+                        else if (paramId == "releaseTime")  paramId = "release";
+                        else if (paramId == "masterVolume") paramId = "volume";
+                        else if (paramId == "limiterEnabled") paramId = "limiter";
 
-    // Master Volume Knob
-    configureKnob (masterVolSlider, masterVolLabel, "MASTER VOL");
-    masterVolAttach = std::make_unique<Attachment> (audioProcessor.apvts, "master_vol", masterVolSlider);
+                        if (paramId == "color" && value <= 1.0f)
+                            value *= 360.0f;
+                        else if ((paramId == "brightness" || paramId == "saturation" || paramId == "complexity") && value <= 1.0f)
+                            value *= 100.0f;
 
-    // Add Central Visual Scope
-    addAndMakeVisible (scopeComponent);
+                        if (auto* param = audioProcessor.apvts.getParameter (paramId)) {
+                            param->setValueNotifyingHost (param->convertTo0to1 (value));
+                        }
+                    }
+                }
+            }
+            completion (juce::var());
+        })
+        // 3. Virtual Keyboard Note On
+        .withNativeFunction ("noteOn", [this](const juce::Array<juce::var>& args, auto completion) {
+            if (args.size() >= 1) {
+                int note = args[0].operator int();
+                float vel = args.size() > 1 ? static_cast<float>(args[1].operator double()) : 0.85f;
+                audioProcessor.noteOn (note, vel);
+            }
+            completion (juce::var());
+        })
+        // 4. Virtual Keyboard Note Off
+        .withNativeFunction ("noteOff", [this](const juce::Array<juce::var>& args, auto completion) {
+            if (args.size() >= 1) {
+                int note = args[0].operator int();
+                audioProcessor.noteOff (note);
+            }
+            completion (juce::var());
+        })
+        // 5. Native File Chooser for Image Uploading
+        .withNativeFunction ("openFileChooser", [this](const juce::Array<juce::var>& args, auto completion) {
+            juce::String slot = args.size() >= 1 ? args[0].toString() : "A";
+            fileChooser = std::make_unique<juce::FileChooser> (
+                "Select Image for Slot " + slot,
+                juce::File::getSpecialLocation (juce::File::userPicturesDirectory),
+                "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif");
 
-    // Window size (Modern square-ish synth format)
-    setSize (860, 520);
+            auto folderFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+            fileChooser->launchAsync (folderFlags, [this, slot, completion](const juce::FileChooser& fc) {
+                auto resultFile = fc.getResult();
+                if (resultFile.existsAsFile()) {
+                    juce::Image loadedImg = juce::ImageFileFormat::loadFrom (resultFile);
+                    if (loadedImg.isValid()) {
+                        if (slot == "A") audioProcessor.loadSlotAImage (loadedImg, resultFile.getFileNameWithoutExtension());
+                        else audioProcessor.loadSlotBImage (loadedImg, resultFile.getFileNameWithoutExtension());
+
+                        juce::MemoryOutputStream mos;
+                        juce::PNGImageFormat pngFormat;
+                        pngFormat.writeImageToStream (loadedImg, mos);
+                        juce::String dataUrl = "data:image/png;base64," + juce::Base64::toBase64 (mos.getData(), mos.getDataSize());
+
+                        auto* obj = new juce::DynamicObject();
+                        obj->setProperty ("dataUrl", dataUrl);
+                        obj->setProperty ("fileName", resultFile.getFileNameWithoutExtension());
+                        completion (juce::var (obj));
+                        return;
+                    }
+                }
+                completion (juce::var());
+            });
+        })
+        // 6. Sync Slot Image from frontend drag-and-drop
+        .withNativeFunction ("syncSlotImage", [this](const juce::Array<juce::var>& args, auto completion) {
+            if (args.size() >= 2) {
+                juce::String slot = args[0].toString();
+                juce::String dataUrl = args[1].toString();
+                juce::String name = args.size() >= 3 ? args[2].toString() : juce::String();
+                audioProcessor.syncSlotImageFromFrontend (slot, dataUrl, name);
+            }
+            completion (juce::var());
+        })
+        // 7. Get Initial State: loads DAW project saved values into the React UI on mount
+        .withNativeFunction ("getInitialState", [this](const juce::Array<juce::var>&, auto completion) {
+            auto* obj = new juce::DynamicObject();
+            obj->setProperty ("bpm", audioProcessor.getBpm());
+            obj->setProperty ("isNativeHost", true);
+            obj->setProperty ("slotAName", audioProcessor.getSlotAName());
+            obj->setProperty ("slotBName", audioProcessor.getSlotBName());
+            obj->setProperty ("slotADataUrl", audioProcessor.getImageSlotAAsDataUrl());
+            obj->setProperty ("slotBDataUrl", audioProcessor.getImageSlotBAsDataUrl());
+            obj->setProperty ("morph", (double)*audioProcessor.apvts.getRawParameterValue ("morph"));
+
+            auto* paramsObj = new juce::DynamicObject();
+            for (auto* param : audioProcessor.apvts.processor.getParameters()) {
+                if (auto* p = dynamic_cast<juce::AudioProcessorParameterWithID*> (param)) {
+                    paramsObj->setProperty (p->paramID, (double) p->getValue());
+                }
+            }
+            obj->setProperty ("parameters", juce::var (paramsObj));
+            completion (juce::var (obj));
+        })
+        // 8. Real-time Oscilloscope Waveform Data for React visualizer
+        .withNativeFunction ("getWaveformData", [this](const juce::Array<juce::var>& args, auto completion) {
+            int numSamples = args.size() >= 1 ? args[0].operator int() : 128;
+            numSamples = juce::jlimit (16, 512, numSamples);
+
+            float rawData[512] { 0.0f };
+            audioProcessor.getScopeData (rawData, numSamples);
+
+            juce::Array<juce::var> arr;
+            for (int i = 0; i < numSamples; ++i) {
+                arr.add ((double) rawData[i]);
+            }
+            completion (juce::var (arr));
+        });
+
+    webBrowser = std::make_unique<juce::WebBrowserComponent> (options);
+    addAndMakeVisible (*webBrowser);
+
+    // Initial Plugin Window Dimensions
+    setResizable (true, true);
+    setResizeLimits (960, 600, 1920, 1200);
+    setSize (1280, 800);
+
+    // Load web UI
+    webBrowser->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 }
 
-PhotoSynthAudioEditor::~PhotoSynthAudioEditor()
-{
-    setLookAndFeel (nullptr);
-}
-
-void PhotoSynthAudioEditor::configureKnob (juce::Slider& slider, juce::Label& label, const juce::String& text)
-{
-    slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 55, 18);
-    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    slider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe67e35));
-    addAndMakeVisible (slider);
-
-    label.setText (text, juce::dontSendNotification);
-    label.setFont (juce::FontOptions (10.0f).withStyle ("Bold"));
-    label.setJustificationType (juce::Justification::centred);
-    label.setColour (juce::Label::textColourId, juce::Colour (0xffbfb7ae));
-    addAndMakeVisible (label);
-}
+PhotoSynthAudioEditor::~PhotoSynthAudioEditor() {}
 
 void PhotoSynthAudioEditor::paint (juce::Graphics& g)
 {
-    // Background `#1a1816`
-    g.fillAll (juce::Colour (0xff1a1816));
-
-    auto bounds = getLocalBounds().toFloat();
-
-    // Top Title Bar
-    auto topBar = bounds.removeFromTop (46.0f);
-    g.setColour (juce::Colour (0xff1f1d1a));
-    g.fillRect (topBar);
-    g.setColour (juce::Colour (0xff2e2b26));
-    g.drawHorizontalLine (45, topBar.getX(), topBar.getRight());
-
-    // Cyber Brand Title
-    g.setColour (juce::Colour (0xfff2ede4));
-    g.setFont (juce::FontOptions (14.0f).withStyle ("Bold"));
-    g.drawText ("PAINT A SYNTH", 18, 0, 200, 46, juce::Justification::centredLeft);
-
-    g.setColour (juce::Colour (0xffe67e35));
-    g.setFont (juce::FontOptions (10.0f).withStyle ("Bold"));
-    g.drawText ("MODULAR SOUND TECHNOLOGIES // V1.0 NATIVE", topBar.reduced (16, 0), juce::Justification::centredRight);
-
-    // Side Controls Panel Surface `#24221f`
-    auto sidePanel = bounds.removeFromLeft (260.0f).reduced (10.0f);
-    g.setColour (juce::Colour (0xff24221f));
-    g.fillRoundedRectangle (sidePanel, 8.0f);
-    g.setColour (juce::Colour (0xff33302b));
-    g.drawRoundedRectangle (sidePanel, 8.0f, 1.5f);
-
-    // Section Header in Controls Panel
-    g.setColour (juce::Colour (0xffe67e35));
-    g.setFont (juce::FontOptions (11.0f).withStyle ("Bold"));
-    g.drawText ("TIMBRE DNA CONTROLS", (int) sidePanel.getX() + 14, (int) sidePanel.getY() + 10, 200, 20, juce::Justification::left);
-
-    // Central Display Panel Surface `#24221f`
-    auto centerPanel = bounds.reduced (10.0f);
-    g.setColour (juce::Colour (0xff24221f));
-    g.fillRoundedRectangle (centerPanel, 8.0f);
-    g.setColour (juce::Colour (0xff33302b));
-    g.drawRoundedRectangle (centerPanel, 8.0f, 1.5f);
+    g.fillAll (juce::Colour (0xff09090b));
 }
 
 void PhotoSynthAudioEditor::resized()
 {
-    auto area = getLocalBounds();
-    area.removeFromTop (46); // Top title bar
+    if (webBrowser != nullptr)
+        webBrowser->setBounds (getLocalBounds());
+}
 
-    // Side Controls Panel Layout
-    auto sideArea = area.removeFromLeft (260).reduced (16);
-    sideArea.removeFromTop (28); // Header label offset
+std::optional<juce::WebBrowserComponent::Resource> PhotoSynthAudioEditor::getResource (const juce::String& url)
+{
+    juce::String cleanUrl = url;
+    if (cleanUrl.startsWith ("/"))
+        cleanUrl = cleanUrl.substring (1);
+    if (cleanUrl.isEmpty() || cleanUrl == "/")
+        cleanUrl = "index.html";
 
-    // 2x2 Grid for 4 Timbre DNA Knobs
-    int knobSize = 92;
-    int colWidth = (sideArea.getWidth() - 10) / 2;
+    // 1. Look in the plugin bundle's Resources directory
+    auto bundleDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile)
+                        .getParentDirectory().getParentDirectory().getChildFile ("Resources").getChildFile ("ui");
+    auto file = bundleDir.getChildFile (cleanUrl);
 
-    auto row1 = sideArea.removeFromTop (knobSize + 22);
-    auto c1 = row1.removeFromLeft (colWidth);
-    colorLabel.setBounds (c1.removeFromBottom (18));
-    colorSlider.setBounds (c1);
+    // 2. Dev / Fallback path: look in project dist/ folder
+    if (!file.existsAsFile()) {
+        auto devDir = juce::File::getSpecialLocation (juce::File::currentApplicationFile)
+                         .getChildFile ("dist");
+        file = devDir.getChildFile (cleanUrl);
+    }
 
-    row1.removeFromLeft (10);
-    brightnessLabel.setBounds (row1.removeFromBottom (18));
-    brightnessSlider.setBounds (row1);
+    if (!file.existsAsFile()) {
+        // Also check direct dist/ relative to working directory
+        file = juce::File::getCurrentWorkingDirectory().getChildFile ("dist").getChildFile (cleanUrl);
+    }
 
-    sideArea.removeFromTop (12);
+    if (file.existsAsFile()) {
+        juce::MemoryBlock data;
+        file.loadFileAsData (data);
 
-    auto row2 = sideArea.removeFromTop (knobSize + 22);
-    auto c2 = row2.removeFromLeft (colWidth);
-    saturationLabel.setBounds (c2.removeFromBottom (18));
-    saturationSlider.setBounds (c2);
+        juce::String mime = "application/octet-stream";
+        if (cleanUrl.endsWith (".html")) mime = "text/html";
+        else if (cleanUrl.endsWith (".js")) mime = "application/javascript";
+        else if (cleanUrl.endsWith (".css")) mime = "text/css";
+        else if (cleanUrl.endsWith (".png")) mime = "image/png";
+        else if (cleanUrl.endsWith (".jpg") || cleanUrl.endsWith (".jpeg")) mime = "image/jpeg";
+        else if (cleanUrl.endsWith (".svg")) mime = "image/svg+xml";
+        else if (cleanUrl.endsWith (".wasm")) mime = "application/wasm";
 
-    row2.removeFromLeft (10);
-    complexityLabel.setBounds (row2.removeFromBottom (18));
-    complexitySlider.setBounds (row2);
+        std::vector<std::byte> byteVec (data.getSize());
+        std::memcpy (byteVec.data(), data.getData(), data.getSize());
+        return juce::WebBrowserComponent::Resource { std::move (byteVec), mime };
+    }
 
-    sideArea.removeFromTop (16);
-
-    // Bottom Master Volume Knob
-    auto masterArea = sideArea.removeFromBottom (85);
-    masterVolLabel.setBounds (masterArea.removeFromBottom (18));
-    masterVolSlider.setBounds (masterArea.withSizeKeepingCentre (75, 75));
-
-    // Central Scope Display Layout
-    auto centerArea = area.reduced (18);
-    scopeComponent.setBounds (centerArea);
+    return std::nullopt;
 }

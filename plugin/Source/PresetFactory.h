@@ -159,6 +159,10 @@ namespace photosynth
             return img;
         }
 
+        static juce::Image createBioluminescentCoral(int w = 400, int h = 300) { return createNeonAurora(w, h); }
+        static juce::Image createDesertDunes(int w = 400, int h = 300) { return createRefractivePrism(w, h); }
+        static juce::Image createCyberpunkAlley(int w = 400, int h = 300) { return createSynthwaveSunset(w, h); }
+
         static juce::Image getPresetImage(int index, int w = 400, int h = 300)
         {
             switch (index % 4)

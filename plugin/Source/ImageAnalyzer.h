@@ -99,6 +99,50 @@ public:
     /** Analyzes image deterministically using juce::Image::BitmapData */
     static ImageAnalysisResult analyzeImage(const juce::Image& image);
 
+    /** Linearly interpolates two image analysis results based on morph factor t (0.0 to 1.0) */
+    static ImageAnalysisResult interpolate(const ImageAnalysisResult& a, const ImageAnalysisResult& b, float t)
+    {
+        auto lerp = [](float v1, float v2, float factor) { return v1 + (v2 - v1) * factor; };
+        ImageAnalysisResult res;
+        res.brightness = lerp(a.brightness, b.brightness, t);
+        res.saturation = lerp(a.saturation, b.saturation, t);
+        res.complexity = lerp(a.complexity, b.complexity, t);
+        res.timbreDna  = lerp(a.timbreDna,  b.timbreDna,  t);
+        res.earthyMutedness = lerp(a.earthyMutedness, b.earthyMutedness, t);
+        res.colorEntropy    = lerp(a.colorEntropy,    b.colorEntropy,    t);
+        res.cutoff     = lerp(a.cutoff,     b.cutoff,     t);
+        res.resonance  = lerp(a.resonance,  b.resonance,  t);
+        res.attack     = lerp(a.attack,     b.attack,     t);
+        res.decay      = lerp(a.decay,      b.decay,      t);
+        res.sustain    = lerp(a.sustain,    b.sustain,    t);
+        res.release    = lerp(a.release,    b.release,    t);
+        res.drive      = lerp(a.drive,      b.drive,      t);
+        res.delayMix   = lerp(a.delayMix,   b.delayMix,   t);
+        res.reverbMix  = lerp(a.reverbMix,  b.reverbMix,  t);
+        res.archetype  = t < 0.5f ? a.archetype : b.archetype;
+        res.temporalEra = t < 0.5f ? a.temporalEra : b.temporalEra;
+        res.pixelSeed  = t < 0.5f ? a.pixelSeed : b.pixelSeed;
+        res.seedHex    = t < 0.5f ? a.seedHex : b.seedHex;
+        return res;
+    }
+
+    /** Blends two images with opacity crossfade */
+    static juce::Image createBlendedPreview(const juce::Image& imgA, const juce::Image& imgB, float t)
+    {
+        if (!imgA.isValid()) return imgB;
+        if (!imgB.isValid()) return imgA;
+        int w = juce::jmin(imgA.getWidth(), imgB.getWidth());
+        int h = juce::jmin(imgA.getHeight(), imgB.getHeight());
+        if (w <= 0 || h <= 0) return imgA;
+
+        juce::Image blended(juce::Image::RGB, w, h, true);
+        juce::Graphics g(blended);
+        g.drawImage(imgA, 0, 0, w, h, 0, 0, imgA.getWidth(), imgA.getHeight());
+        g.setOpacity(juce::jlimit(0.0f, 1.0f, t));
+        g.drawImage(imgB, 0, 0, w, h, 0, 0, imgB.getWidth(), imgB.getHeight());
+        return blended;
+    }
+
     /** Computes 64-bit FNV-1a checksum across entire image bitmap */
     static juce::uint64 computeFNV1a64(const juce::Image::BitmapData& bitmap);
 

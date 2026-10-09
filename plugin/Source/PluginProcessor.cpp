@@ -185,7 +185,10 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     {
         const juce::ScopedLock sl (midiLock);
         if (!internalMidiBuffer.isEmpty()) {
-            midiMessages.addEvents (internalMidiBuffer, 0, -1, 0);
+            for (const auto metadata : internalMidiBuffer) {
+                const int samplePos = juce::jlimit (0, juce::jmax (0, buffer.getNumSamples() - 1), metadata.samplePosition);
+                midiMessages.addEvent (metadata.getMessage(), samplePos);
+            }
             internalMidiBuffer.clear();
         }
     }
@@ -314,23 +317,32 @@ void PhotoSynthAudioProcessor::setStateInformation (const void* data, int sizeIn
     }
 }
 
-void PhotoSynthAudioProcessor::noteOn (int midiNoteNumber, float velocity)
+void PhotoSynthAudioProcessor::noteOn (int midiNoteNumber, float velocity, int midiChannel)
 {
+    const int ch = (midiChannel >= 1 && midiChannel <= 16) ? midiChannel : 1;
     const juce::ScopedLock sl (midiLock);
-    internalMidiBuffer.addEvent (juce::MidiMessage::noteOn (1, midiNoteNumber, velocity), 0);
+    internalMidiBuffer.addEvent (juce::MidiMessage::noteOn (ch, midiNoteNumber, velocity), 0);
 }
 
-void PhotoSynthAudioProcessor::noteOff (int midiNoteNumber)
+void PhotoSynthAudioProcessor::noteOff (int midiNoteNumber, int midiChannel)
 {
+    const int ch = (midiChannel >= 1 && midiChannel <= 16) ? midiChannel : 1;
     const juce::ScopedLock sl (midiLock);
-    internalMidiBuffer.addEvent (juce::MidiMessage::noteOff (1, midiNoteNumber), 0);
+    internalMidiBuffer.addEvent (juce::MidiMessage::noteOff (ch, midiNoteNumber), 0);
 }
 
-void PhotoSynthAudioProcessor::allNotesOff()
+void PhotoSynthAudioProcessor::allNotesOff (int midiChannel)
 {
     const juce::ScopedLock sl (midiLock);
-    internalMidiBuffer.addEvent (juce::MidiMessage::allNotesOff (1), 0);
-    synth.allNotesOff (0, false);
+    if (midiChannel >= 1 && midiChannel <= 16) {
+        internalMidiBuffer.addEvent (juce::MidiMessage::allNotesOff (midiChannel), 0);
+        synth.allNotesOff (midiChannel, false);
+    } else {
+        for (int ch = 1; ch <= 16; ++ch) {
+            internalMidiBuffer.addEvent (juce::MidiMessage::allNotesOff (ch), 0);
+        }
+        synth.allNotesOff (0, false);
+    }
 }
 
 void PhotoSynthAudioProcessor::getScopeData (float* destination, int numSamples)

@@ -80,7 +80,8 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
             if (args.size() >= 1) {
                 int note = args[0].operator int();
                 float vel = args.size() > 1 ? static_cast<float>(args[1].operator double()) : 0.85f;
-                audioProcessor.noteOn (note, vel);
+                int ch = args.size() > 2 ? args[2].operator int() : 1;
+                audioProcessor.noteOn (note, vel, ch);
             }
             completion (juce::var());
         })
@@ -88,7 +89,8 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
         .withNativeFunction ("noteOff", [this](const juce::Array<juce::var>& args, auto completion) {
             if (args.size() >= 1) {
                 int note = args[0].operator int();
-                audioProcessor.noteOff (note);
+                int ch = args.size() > 1 ? args[1].operator int() : 1;
+                audioProcessor.noteOff (note, ch);
             }
             completion (juce::var());
         })

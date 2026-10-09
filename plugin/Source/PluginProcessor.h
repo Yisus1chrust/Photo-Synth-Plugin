@@ -76,9 +76,9 @@ public:
     void getScopeData (float* destination, int numSamples);
 
     // Virtual Keyboard Trigger Helpers for UI
-    void noteOn (int midiNoteNumber, float velocity);
-    void noteOff (int midiNoteNumber);
-    void allNotesOff();
+    void noteOn (int midiNoteNumber, float velocity, int midiChannel = 1);
+    void noteOff (int midiNoteNumber, int midiChannel = 1);
+    void allNotesOff (int midiChannel = 0);
 
     void updateParametersFromAnalysis();
     void applyAnalysisToParameters (const ImageAnalysisResult& analysis);

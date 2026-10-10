@@ -40,6 +40,19 @@ void SynthVoice::prepare(double sampleRate, int /*samplesPerBlock*/)
     fParams.sustain = 0.60f;
     fParams.release = 0.30f;
     filterEnv.setParameters(fParams);
+
+    // Default currentParams to playable HybridWavetable archetype
+    currentParams.cutoff     = 2000.0f;
+    currentParams.resonance  = 1.0f;
+    currentParams.attack     = 0.015f;
+    currentParams.decay      = 0.35f;
+    currentParams.sustain    = 0.80f;
+    currentParams.release    = 0.30f;
+    currentParams.color      = 88.0f;
+    currentParams.brightness = 45.0f;
+    currentParams.saturation = 83.0f;
+    currentParams.complexity = 52.0f;
+    currentParams.archetype  = SynthArchetype::HybridWavetable;
 }
 
 void SynthVoice::updatePatch(const VoiceParams& params)
@@ -69,6 +82,28 @@ void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::Synthesiser
 
     float sr = (float)(currentSampleRate > 1000.0 ? currentSampleRate : 44100.0);
     phaseIncrement = currentPitchHz / sr;
+
+    // Guard against uninitialized state from external DAW keyboards
+    if (currentParams.cutoff <= 20.0f || currentParams.cutoff > 20000.0f)
+        currentParams.cutoff = 2000.0f;
+    if (currentParams.attack <= 0.0f)
+        currentParams.attack = 0.015f;
+    if (currentParams.decay <= 0.0f)
+        currentParams.decay = 0.35f;
+    if (currentParams.sustain <= 0.0f)
+        currentParams.sustain = 0.70f;
+    if (currentParams.release <= 0.0f)
+        currentParams.release = 0.30f;
+    if (currentParams.resonance <= 0.0f)
+        currentParams.resonance = 1.0f;
+
+    // Ensure valid archetype (default to HybridWavetable if uninitialized)
+    if (currentParams.archetype != SynthArchetype::AnalogBrass &&
+        currentParams.archetype != SynthArchetype::DigitalFmBells &&
+        currentParams.archetype != SynthArchetype::HybridWavetable)
+    {
+        currentParams.archetype = SynthArchetype::HybridWavetable;
+    }
 
     // Reset modulation phase for punchy transient attack
     phaseMod = 0.0f;

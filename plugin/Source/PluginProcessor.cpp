@@ -146,9 +146,52 @@ bool PhotoSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
 void PhotoSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     synth.setCurrentPlaybackSampleRate (sampleRate);
+    updateMorphState();
+
+    VoiceParams p;
+    p.cutoff    = apvts.getRawParameterValue ("cutoff")->load();
+    p.resonance = apvts.getRawParameterValue ("resonance")->load();
+    p.lfoRate   = apvts.getRawParameterValue ("lfoRate")->load();
+    p.lfoDepth  = apvts.getRawParameterValue ("lfoDepth")->load();
+    p.attack    = apvts.getRawParameterValue ("attack")->load();
+    p.decay     = apvts.getRawParameterValue ("decay")->load();
+    p.sustain   = apvts.getRawParameterValue ("sustain")->load();
+    p.release   = apvts.getRawParameterValue ("release")->load();
+    p.drive     = apvts.getRawParameterValue ("drive")->load();
+
+    if (auto* cp = apvts.getRawParameterValue ("color"))
+        p.color = cp->load();
+    else
+        p.color = currentAnalysis.timbreDna * 360.0f;
+
+    if (auto* bp = apvts.getRawParameterValue ("brightness"))
+        p.brightness = bp->load();
+    else
+        p.brightness = currentAnalysis.brightness * 100.0f;
+
+    if (auto* sp = apvts.getRawParameterValue ("saturation"))
+        p.saturation = sp->load();
+    else
+        p.saturation = currentAnalysis.saturation * 100.0f;
+
+    if (auto* cxp = apvts.getRawParameterValue ("complexity"))
+        p.complexity = cxp->load();
+    else
+        p.complexity = currentAnalysis.complexity * 100.0f;
+
+    float archVal = apvts.getRawParameterValue ("archetype")->load();
+    int archInt = (int) std::round (archVal);
+    if (archInt == 1) p.archetype = SynthArchetype::DigitalFmBells;
+    else if (archInt == 2) p.archetype = SynthArchetype::HybridWavetable;
+    else if (archInt == 0) p.archetype = SynthArchetype::AnalogBrass;
+    else p.archetype = currentAnalysis.archetype;
+    p.era = currentAnalysis.temporalEra.era;
+
     for (int i = 0; i < synth.getNumVoices(); ++i) {
-        if (auto* voice = dynamic_cast<SynthVoice*> (synth.getVoice (i)))
+        if (auto* voice = dynamic_cast<SynthVoice*> (synth.getVoice (i))) {
             voice->prepare (sampleRate, samplesPerBlock);
+            voice->updatePatch (p);
+        }
     }
 
     juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) samplesPerBlock, 2 };
@@ -181,21 +224,9 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         }
     }
 
-    // 3. Thread-safe merge of virtual UI keyboard events with incoming DAW MIDI
-    {
-        const juce::ScopedLock sl (midiLock);
-        if (!internalMidiBuffer.isEmpty()) {
-            for (const auto metadata : internalMidiBuffer) {
-                const int samplePos = juce::jlimit (0, juce::jmax (0, buffer.getNumSamples() - 1), metadata.samplePosition);
-                midiMessages.addEvent (metadata.getMessage(), samplePos);
-            }
-            internalMidiBuffer.clear();
-        }
-    }
-
+    // 3. Pre-bind live parameters to all polyphonic voices BEFORE processing MIDI or audio
     updateMorphState();
 
-    // 4. Load APVTS parameters atomically and feed into VoiceParams
     VoiceParams p;
     p.cutoff    = apvts.getRawParameterValue ("cutoff")->load();
     p.resonance = apvts.getRawParameterValue ("resonance")->load();
@@ -238,6 +269,18 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     for (int i = 0; i < synth.getNumVoices(); ++i) {
         if (auto* voice = dynamic_cast<SynthVoice*> (synth.getVoice (i))) {
             voice->updatePatch (p);
+        }
+    }
+
+    // 4. Thread-safe merge of virtual UI keyboard events with incoming DAW MIDI
+    {
+        const juce::ScopedLock sl (midiLock);
+        if (!internalMidiBuffer.isEmpty()) {
+            for (const auto metadata : internalMidiBuffer) {
+                const int samplePos = juce::jlimit (0, juce::jmax (0, buffer.getNumSamples() - 1), metadata.samplePosition);
+                midiMessages.addEvent (metadata.getMessage(), samplePos);
+            }
+            internalMidiBuffer.clear();
         }
     }
 

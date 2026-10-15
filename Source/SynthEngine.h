@@ -26,7 +26,7 @@ struct VoiceParams
     float brightness { 45.0f };    // 0 to 100
     float saturation { 83.0f };    // 0 to 100
     float complexity { 52.0f };    // 0 to 100
-    SynthArchetype archetype { SynthArchetype::AnalogBrass };
+    SynthArchetype archetype { SynthArchetype::HybridWavetable };
     TemporalEra era { TemporalEra::Era1970s };
 };
 
@@ -45,8 +45,10 @@ public:
 
     void prepare(double sampleRate, int samplesPerBlock);
     void updatePatch(const VoiceParams& params);
+    void setSharedParams(const VoiceParams* sharedParams) { masterParams = sharedParams; }
 
 private:
+    const VoiceParams* masterParams { nullptr };
     double currentSampleRate { 44100.0 };
     float currentPitchHz { 440.0f };
     float phaseIncrement { 0.0f };

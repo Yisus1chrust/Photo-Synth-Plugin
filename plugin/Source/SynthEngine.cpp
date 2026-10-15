@@ -83,6 +83,12 @@ void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::Synthesiser
     float sr = (float)(currentSampleRate > 1000.0 ? currentSampleRate : 44100.0);
     phaseIncrement = currentPitchHz / sr;
 
+    // Surge XT pattern: sync active master patch parameters at note onset
+    if (masterParams != nullptr)
+    {
+        currentParams = *masterParams;
+    }
+
     // Guard against uninitialized state from external DAW keyboards
     if (currentParams.cutoff <= 20.0f || currentParams.cutoff > 20000.0f)
         currentParams.cutoff = 2000.0f;
@@ -104,6 +110,21 @@ void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::Synthesiser
     {
         currentParams.archetype = SynthArchetype::HybridWavetable;
     }
+
+    // Refresh envelope parameters to ensure active preset envelope is applied immediately
+    juce::ADSR::Parameters ampParams;
+    ampParams.attack  = juce::jmax(0.012f, currentParams.attack);
+    ampParams.decay   = juce::jmax(0.02f, currentParams.decay);
+    ampParams.sustain = juce::jlimit(0.05f, 1.0f, currentParams.sustain);
+    ampParams.release = juce::jmax(0.02f, currentParams.release);
+    ampEnv.setParameters(ampParams);
+
+    juce::ADSR::Parameters fParams;
+    fParams.attack  = juce::jmax(0.012f, currentParams.attack * 0.8f);
+    fParams.decay   = juce::jmax(0.02f, currentParams.decay * 1.2f);
+    fParams.sustain = 0.5f;
+    fParams.release = juce::jmax(0.02f, currentParams.release * 0.8f);
+    filterEnv.setParameters(fParams);
 
     // Reset modulation phase for punchy transient attack
     phaseMod = 0.0f;

@@ -13,10 +13,12 @@ PhotoSynthAudioProcessor::PhotoSynthAudioProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
-    // Register custom sound and 16 polyphonic voice instances
+    // Register custom sound and 16 polyphonic voice instances with shared master params
     synth.addSound (new PhotoSynthSound());
     for (int i = 0; i < 16; ++i) {
-        synth.addVoice (new SynthVoice());
+        auto* v = new SynthVoice();
+        v->setSharedParams (&activeVoiceParams);
+        synth.addVoice (v);
     }
 
     // Default starting presets matching the web UI
@@ -30,6 +32,7 @@ PhotoSynthAudioProcessor::PhotoSynthAudioProcessor()
     updateMorphState();
     updateBlendedImage();
     applyAnalysisToParameters (currentAnalysis);
+    refreshActiveVoiceParams();
 }
 
 PhotoSynthAudioProcessor::~PhotoSynthAudioProcessor() {}
@@ -143,56 +146,63 @@ bool PhotoSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
 }
 #endif
 
-void PhotoSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void PhotoSynthAudioProcessor::refreshActiveVoiceParams()
 {
-    synth.setCurrentPlaybackSampleRate (sampleRate);
     updateMorphState();
 
-    VoiceParams p;
-    p.cutoff    = apvts.getRawParameterValue ("cutoff")->load();
-    p.resonance = apvts.getRawParameterValue ("resonance")->load();
-    p.lfoRate   = apvts.getRawParameterValue ("lfoRate")->load();
-    p.lfoDepth  = apvts.getRawParameterValue ("lfoDepth")->load();
-    p.attack    = apvts.getRawParameterValue ("attack")->load();
-    p.decay     = apvts.getRawParameterValue ("decay")->load();
-    p.sustain   = apvts.getRawParameterValue ("sustain")->load();
-    p.release   = apvts.getRawParameterValue ("release")->load();
-    p.drive     = apvts.getRawParameterValue ("drive")->load();
+    activeVoiceParams.cutoff    = apvts.getRawParameterValue ("cutoff")->load();
+    activeVoiceParams.resonance = apvts.getRawParameterValue ("resonance")->load();
+    activeVoiceParams.lfoRate   = apvts.getRawParameterValue ("lfoRate")->load();
+    activeVoiceParams.lfoDepth  = apvts.getRawParameterValue ("lfoDepth")->load();
+    activeVoiceParams.attack    = apvts.getRawParameterValue ("attack")->load();
+    activeVoiceParams.decay     = apvts.getRawParameterValue ("decay")->load();
+    activeVoiceParams.sustain   = apvts.getRawParameterValue ("sustain")->load();
+    activeVoiceParams.release   = apvts.getRawParameterValue ("release")->load();
+    activeVoiceParams.drive     = apvts.getRawParameterValue ("drive")->load();
 
     if (auto* cp = apvts.getRawParameterValue ("color"))
-        p.color = cp->load();
+        activeVoiceParams.color = cp->load();
     else
-        p.color = currentAnalysis.timbreDna * 360.0f;
+        activeVoiceParams.color = currentAnalysis.timbreDna * 360.0f;
 
     if (auto* bp = apvts.getRawParameterValue ("brightness"))
-        p.brightness = bp->load();
+        activeVoiceParams.brightness = bp->load();
     else
-        p.brightness = currentAnalysis.brightness * 100.0f;
+        activeVoiceParams.brightness = currentAnalysis.brightness * 100.0f;
 
     if (auto* sp = apvts.getRawParameterValue ("saturation"))
-        p.saturation = sp->load();
+        activeVoiceParams.saturation = sp->load();
     else
-        p.saturation = currentAnalysis.saturation * 100.0f;
+        activeVoiceParams.saturation = currentAnalysis.saturation * 100.0f;
 
     if (auto* cxp = apvts.getRawParameterValue ("complexity"))
-        p.complexity = cxp->load();
+        activeVoiceParams.complexity = cxp->load();
     else
-        p.complexity = currentAnalysis.complexity * 100.0f;
+        activeVoiceParams.complexity = currentAnalysis.complexity * 100.0f;
 
     float archVal = apvts.getRawParameterValue ("archetype")->load();
     int archInt = (int) std::round (archVal);
-    if (archInt == 1) p.archetype = SynthArchetype::DigitalFmBells;
-    else if (archInt == 2) p.archetype = SynthArchetype::HybridWavetable;
-    else if (archInt == 0) p.archetype = SynthArchetype::AnalogBrass;
-    else p.archetype = currentAnalysis.archetype;
-    p.era = currentAnalysis.temporalEra.era;
+    if (archInt == 1) activeVoiceParams.archetype = SynthArchetype::DigitalFmBells;
+    else if (archInt == 2) activeVoiceParams.archetype = SynthArchetype::HybridWavetable;
+    else if (archInt == 0) activeVoiceParams.archetype = SynthArchetype::AnalogBrass;
+    else activeVoiceParams.archetype = currentAnalysis.archetype;
+    activeVoiceParams.era = currentAnalysis.temporalEra.era;
 
     for (int i = 0; i < synth.getNumVoices(); ++i) {
         if (auto* voice = dynamic_cast<SynthVoice*> (synth.getVoice (i))) {
-            voice->prepare (sampleRate, samplesPerBlock);
-            voice->updatePatch (p);
+            voice->updatePatch (activeVoiceParams);
         }
     }
+}
+
+void PhotoSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    synth.setCurrentPlaybackSampleRate (sampleRate);
+    for (int i = 0; i < synth.getNumVoices(); ++i) {
+        if (auto* voice = dynamic_cast<SynthVoice*> (synth.getVoice (i)))
+            voice->prepare (sampleRate, samplesPerBlock);
+    }
+    refreshActiveVoiceParams();
 
     juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) samplesPerBlock, 2 };
     effectsChain.prepare (spec);
@@ -225,52 +235,7 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     }
 
     // 3. Pre-bind live parameters to all polyphonic voices BEFORE processing MIDI or audio
-    updateMorphState();
-
-    VoiceParams p;
-    p.cutoff    = apvts.getRawParameterValue ("cutoff")->load();
-    p.resonance = apvts.getRawParameterValue ("resonance")->load();
-    p.lfoRate   = apvts.getRawParameterValue ("lfoRate")->load();
-    p.lfoDepth  = apvts.getRawParameterValue ("lfoDepth")->load();
-    p.attack    = apvts.getRawParameterValue ("attack")->load();
-    p.decay     = apvts.getRawParameterValue ("decay")->load();
-    p.sustain   = apvts.getRawParameterValue ("sustain")->load();
-    p.release   = apvts.getRawParameterValue ("release")->load();
-    p.drive     = apvts.getRawParameterValue ("drive")->load();
-
-    if (auto* cp = apvts.getRawParameterValue ("color"))
-        p.color = cp->load();
-    else
-        p.color = currentAnalysis.timbreDna * 360.0f;
-
-    if (auto* bp = apvts.getRawParameterValue ("brightness"))
-        p.brightness = bp->load();
-    else
-        p.brightness = currentAnalysis.brightness * 100.0f;
-
-    if (auto* sp = apvts.getRawParameterValue ("saturation"))
-        p.saturation = sp->load();
-    else
-        p.saturation = currentAnalysis.saturation * 100.0f;
-
-    if (auto* cxp = apvts.getRawParameterValue ("complexity"))
-        p.complexity = cxp->load();
-    else
-        p.complexity = currentAnalysis.complexity * 100.0f;
-
-    float archVal = apvts.getRawParameterValue ("archetype")->load();
-    int archInt = (int) std::round (archVal);
-    if (archInt == 1) p.archetype = SynthArchetype::DigitalFmBells;
-    else if (archInt == 2) p.archetype = SynthArchetype::HybridWavetable;
-    else if (archInt == 0) p.archetype = SynthArchetype::AnalogBrass;
-    else p.archetype = currentAnalysis.archetype;
-    p.era = currentAnalysis.temporalEra.era;
-
-    for (int i = 0; i < synth.getNumVoices(); ++i) {
-        if (auto* voice = dynamic_cast<SynthVoice*> (synth.getVoice (i))) {
-            voice->updatePatch (p);
-        }
-    }
+    refreshActiveVoiceParams();
 
     // 4. Thread-safe merge of virtual UI keyboard events with incoming DAW MIDI
     {
@@ -357,6 +322,7 @@ void PhotoSynthAudioProcessor::setStateInformation (const void* data, int sizeIn
 
         updateMorphState();
         updateBlendedImage();
+        refreshActiveVoiceParams();
     }
 }
 

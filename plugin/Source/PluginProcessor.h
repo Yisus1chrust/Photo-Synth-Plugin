@@ -28,10 +28,11 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Paint a Synth"; }
+    const juce::String getName() const override { return "Photo Synth"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
+    bool isSynth() const { return true; }
     double getTailLengthSeconds() const override { return 0.0; }
 
     // Pure Software Instrument (no input audio bus)
@@ -107,6 +108,9 @@ private:
     float scopeBuffer[scopeBufferSize] { 0.0f };
     int scopeBufferWriteIndex { 0 };
     juce::CriticalSection scopeLock;
+
+    VoiceParams activeVoiceParams;
+    void refreshActiveVoiceParams();
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void updateMorphState();

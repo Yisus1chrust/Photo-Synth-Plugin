@@ -66,7 +66,21 @@ public:
     juce::String getSlotBName() const { return slotBName; }
     juce::String getImageSlotAAsDataUrl() const;
     juce::String getImageSlotBAsDataUrl() const;
-    void syncSlotImageFromFrontend (const juce::String& slot, const juce::String& dataUrl, const juce::String& name);
+    /** Decodes a frontend data URL (PNG/JPEG/GIF), analyses it and makes it the slot image.
+        Returns false if the image could not be decoded. Message thread only. */
+    bool syncSlotImageFromFrontend (const juce::String& slot, const juce::String& dataUrl, const juce::String& name);
+
+    /** Body of the WebView "syncPatch" native function. Writes every known key of the
+        frontend patch object (already in APVTS units, e.g. cutoff Hz, brightness 0-100,
+        archetype 0/1/2) into the APVTS. processBlock pushes the APVTS into the voices at
+        the start of every block. Unknown keys are ignored. Returns number of params set. */
+    int applyFrontendPatch (const juce::var& patchObject);
+
+    /** Body of the WebView "getInitialState" native function. Parameter values are in
+        real units (not 0-1 normalised). */
+    juce::var getInitialStateForFrontend() const;
+
+    bool hasFrontendState() const { return frontendStateKnown; }
 
     /** Message thread: analysis for the current morph position (A/B interpolation). */
     ImageAnalysisResult getLatestAnalysis() const;
@@ -155,6 +169,13 @@ private:
     juce::Image blendedImage;
     juce::String slotAName { "Synthwave Sunset" };
     juce::String slotBName { "Obsidian Crypt" };
+
+    // Exact data URLs the frontend sent (the photos the user picked). Persisted in the
+    // plugin state so a reopened project / reopened editor shows and plays the same photo.
+    juce::String slotAFrontendDataUrl, slotBFrontendDataUrl;
+    // True once the host restored a state or the frontend pushed a patch, i.e. the APVTS
+    // holds a deliberate patch the UI must adopt rather than overwrite with its defaults.
+    bool frontendStateKnown { false };
 
     ImageAnalysisResult analysisSlotA;
     ImageAnalysisResult analysisSlotB;

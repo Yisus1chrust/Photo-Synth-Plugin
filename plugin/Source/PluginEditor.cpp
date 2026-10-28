@@ -46,34 +46,11 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
             }
             completion (juce::var());
         })
-        // 2. syncPatch native function (batch parameter synchronization)
+        // 2. syncPatch native function (batch parameter synchronization of the
+        //    photo-derived patch). Logic lives in the processor so it is unit-testable.
         .withNativeFunction ("syncPatch", [this](const juce::Array<juce::var>& args, auto completion) {
-            if (args.size() >= 1 && args[0].isObject()) {
-                if (auto* obj = args[0].getDynamicObject()) {
-                    for (const auto& prop : obj->getProperties()) {
-                        juce::String paramId = prop.name.toString();
-                        float value = static_cast<float>(prop.value.operator double());
-
-                        if (paramId == "cutoffOffset")      paramId = "cutoff";
-                        else if (paramId == "attackTime")   paramId = "attack";
-                        else if (paramId == "decayTime")    paramId = "decay";
-                        else if (paramId == "sustainLevel") paramId = "sustain";
-                        else if (paramId == "releaseTime")  paramId = "release";
-                        else if (paramId == "masterVolume") paramId = "volume";
-                        else if (paramId == "limiterEnabled") paramId = "limiter";
-
-                        if (paramId == "color" && value <= 1.0f)
-                            value *= 360.0f;
-                        else if ((paramId == "brightness" || paramId == "saturation" || paramId == "complexity") && value <= 1.0f)
-                            value *= 100.0f;
-
-                        if (auto* param = audioProcessor.apvts.getParameter (paramId)) {
-                            param->setValueNotifyingHost (param->convertTo0to1 (value));
-                        }
-                    }
-                }
-            }
-            completion (juce::var());
+            const int numSet = args.size() >= 1 ? audioProcessor.applyFrontendPatch (args[0]) : 0;
+            completion (juce::var (numSet));
         })
         // 3. Virtual Keyboard Note On
         .withNativeFunction ("noteOn", [this](const juce::Array<juce::var>& args, auto completion) {
@@ -132,29 +109,14 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
                 juce::String slot = args[0].toString();
                 juce::String dataUrl = args[1].toString();
                 juce::String name = args.size() >= 3 ? args[2].toString() : juce::String();
-                audioProcessor.syncSlotImageFromFrontend (slot, dataUrl, name);
+                completion (juce::var (audioProcessor.syncSlotImageFromFrontend (slot, dataUrl, name)));
+                return;
             }
-            completion (juce::var());
+            completion (juce::var (false));
         })
         // 7. Get Initial State: loads DAW project saved values into the React UI on mount
         .withNativeFunction ("getInitialState", [this](const juce::Array<juce::var>&, auto completion) {
-            auto* obj = new juce::DynamicObject();
-            obj->setProperty ("bpm", audioProcessor.getBpm());
-            obj->setProperty ("isNativeHost", true);
-            obj->setProperty ("slotAName", audioProcessor.getSlotAName());
-            obj->setProperty ("slotBName", audioProcessor.getSlotBName());
-            obj->setProperty ("slotADataUrl", audioProcessor.getImageSlotAAsDataUrl());
-            obj->setProperty ("slotBDataUrl", audioProcessor.getImageSlotBAsDataUrl());
-            obj->setProperty ("morph", (double)*audioProcessor.apvts.getRawParameterValue ("morph"));
-
-            auto* paramsObj = new juce::DynamicObject();
-            for (auto* param : audioProcessor.apvts.processor.getParameters()) {
-                if (auto* p = dynamic_cast<juce::AudioProcessorParameterWithID*> (param)) {
-                    paramsObj->setProperty (p->paramID, (double) p->getValue());
-                }
-            }
-            obj->setProperty ("parameters", juce::var (paramsObj));
-            completion (juce::var (obj));
+            completion (audioProcessor.getInitialStateForFrontend());
         })
         // 8. Real-time Oscilloscope Waveform Data for React visualizer
         .withNativeFunction ("getWaveformData", [this](const juce::Array<juce::var>& args, auto completion) {

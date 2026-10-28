@@ -224,6 +224,16 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
     float normSaturation = juce::jlimit(0.0f, 1.0f, currentParams.saturation > 1.0f ? currentParams.saturation / 100.0f : currentParams.saturation);
     float effectiveDrive = juce::jlimit(0.0f, 1.0f, currentParams.drive + normSaturation * 0.60f);
 
+    // 5. Per-archetype loudness compensation - same purpose as WebAudioEngine.ts
+    //    `engineGainBoost` (equal perceived level across engines). Factors come from
+    //    measuring sustained single-note RMS of each C++ archetype (C4, vel 0.8, no drive):
+    //    AnalogBrass 0.0610, DigitalFmBells 0.0894, HybridWavetable 0.0796 -> normalised
+    //    to HybridWavetable so the default archetype keeps its existing level.
+    const float engineGainBoost = currentParams.archetype == SynthArchetype::AnalogBrass    ? 1.304f
+                                : currentParams.archetype == SynthArchetype::DigitalFmBells ? 0.890f
+                                                                                            : 1.000f;
+    const float archetypeGain = 0.30f * engineGainBoost;
+
     for (int i = 0; i < numSamples; ++i)
     {
         float envGain = ampEnv.getNextSample();
@@ -330,7 +340,7 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         }
 
         // Voice envelope and velocity scaling
-        float voiceGain = envGain * currentVelocity * 0.30f;
+        float voiceGain = envGain * currentVelocity * archetypeGain;
         float sampleL = outL * voiceGain;
         float sampleR = outR * voiceGain;
 

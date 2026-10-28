@@ -342,8 +342,11 @@ export default function App() {
     if (initialLoadDone.current) return;
     initialLoadDone.current = true;
 
-    // Immediately prime WebAudio engine with default Synthwave Sunset patch
-    globalAudioEngine.updateParameters(defaultSlotA.patch);
+    // Prime the browser WebAudio engine with the default Synthwave Sunset patch -
+    // web preview only. In plugin mode the C++ engine initialises its own defaults.
+    if (!pluginBridge.isNativeEnvironment()) {
+      globalAudioEngine.updateParameters(defaultSlotA.patch);
+    }
     if (!pluginBridge.isNativeEnvironment()) {
       pluginBridge.syncFullPatch(defaultSlotA.patch, defaultSlotA.metrics);
       pluginBridge.syncSlotImage('A', defaultSlotA.dataUrl, defaultSlotA.title);
@@ -987,9 +990,13 @@ export default function App() {
       setIsLicenseModalOpen(true);
       return;
     }
-    await globalAudioEngine.initAudio();
+    if (!pluginBridge.isNativeEnvironment()) {
+      await globalAudioEngine.initAudio();
+    }
     if (patch) {
-      globalAudioEngine.updateParameters(patch);
+      if (!pluginBridge.isNativeEnvironment()) {
+        globalAudioEngine.updateParameters(patch);
+      }
       pluginBridge.syncFullPatch(patch, metrics);
     }
     setAudioStarted(true);
@@ -1003,9 +1010,13 @@ export default function App() {
       }
       if (!audioStarted) {
         setAudioStarted(true);
-        globalAudioEngine.initAudio().catch(() => {});
+        if (!pluginBridge.isNativeEnvironment()) {
+          globalAudioEngine.initAudio().catch(() => {});
+        }
         if (patch) {
-          globalAudioEngine.updateParameters(patch);
+          if (!pluginBridge.isNativeEnvironment()) {
+            globalAudioEngine.updateParameters(patch);
+          }
           pluginBridge.syncFullPatch(patch, metrics);
         }
       }

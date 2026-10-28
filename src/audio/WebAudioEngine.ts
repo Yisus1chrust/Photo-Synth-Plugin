@@ -45,6 +45,26 @@ export const DEFAULT_PATCH_PARAMS: PatchParameters = {
   temporalEraVal: 0.5,
 };
 
+/**
+ * True when the UI is hosted inside the JUCE 8 WebBrowserComponent (VST3 / AU /
+ * Standalone plugin). In that case ALL audio must come from the native C++ engine,
+ * so this browser engine must never create an AudioContext or emit sound.
+ * Checked on every call because window.__JUCE__ can be injected after module load.
+ * (Kept local - importing PluginBridge here would create a circular import.)
+ */
+export function isPluginHostEnvironment(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as any;
+  if (w.__PHOTO_SYNTH_HYBRID__ || w.__PHOTO_SYNTH_NATIVE_HOST__ || w.PhotoSynthNative) return true;
+  if (w.__JUCE__?.backend || w.__JUCE__?.getNativeFunction || w.Juce?.getNativeFunction) return true;
+  try {
+    const q = new URLSearchParams(window.location.search);
+    return q.get('hybrid') === '1' || q.get('mode') === 'plugin';
+  } catch {
+    return false;
+  }
+}
+
 export class WebAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -162,6 +182,9 @@ export class WebAudioEngine {
   }
 
   public async initAudio(): Promise<void> {
+    // Plugin/DAW mode: the native C++ engine is the only sound source. Never create
+    // an AudioContext here (it would play a second, different synth in the WebView).
+    if (isPluginHostEnvironment()) return;
     if (this.isInitialized && this.ctx && this.ctx.state === 'running') return;
 
     try {
@@ -709,6 +732,8 @@ export class WebAudioEngine {
   }
 
   public noteOn(midiNote: number, velocity = 0.8): void {
+    // Plugin/DAW mode: notes are rendered by the C++ engine only.
+    if (isPluginHostEnvironment()) return;
     if (!this.isInitialized || !this.ctx) {
       this.initAudio().then(() => {
         this.noteOn(midiNote, velocity);

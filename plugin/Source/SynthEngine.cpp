@@ -42,20 +42,20 @@ void SynthVoice::sanitise(VoiceParams& p)
 {
     auto finiteOr = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
 
-    p.cutoff     = finiteOr(p.cutoff, 2000.0f);
-    if (p.cutoff <= 20.0f || p.cutoff > 20000.0f) p.cutoff = 2000.0f;
-    p.resonance  = finiteOr(p.resonance, 1.0f);
-    if (p.resonance <= 0.0f) p.resonance = 1.0f;
-    p.attack     = finiteOr(p.attack, 0.015f);
-    if (p.attack <= 0.0f) p.attack = 0.015f;
+    p.cutoff     = finiteOr(p.cutoff, 2400.0f);
+    if (p.cutoff <= 20.0f || p.cutoff > 20000.0f) p.cutoff = 2400.0f;
+    p.resonance  = finiteOr(p.resonance, 1.2f);
+    if (p.resonance <= 0.0f) p.resonance = 1.2f;
+    p.attack     = finiteOr(p.attack, 0.030f);
+    if (p.attack <= 0.0f) p.attack = 0.030f;
     p.decay      = finiteOr(p.decay, 0.35f);
     if (p.decay <= 0.0f) p.decay = 0.35f;
     p.sustain    = finiteOr(p.sustain, 0.70f);
     if (p.sustain <= 0.0f) p.sustain = 0.70f;
-    p.release    = finiteOr(p.release, 0.30f);
-    if (p.release <= 0.0f) p.release = 0.30f;
+    p.release    = finiteOr(p.release, 0.45f);
+    if (p.release <= 0.0f) p.release = 0.45f;
     p.lfoRate    = juce::jlimit(0.0f, 50.0f, finiteOr(p.lfoRate, 2.0f));
-    p.lfoDepth   = juce::jlimit(0.0f, 1.0f, finiteOr(p.lfoDepth, 0.2f));
+    p.lfoDepth   = juce::jlimit(0.0f, 1.0f, finiteOr(p.lfoDepth, 0.25f));
     p.drive      = juce::jlimit(0.0f, 1.0f, finiteOr(p.drive, 0.0f));
     p.color      = finiteOr(p.color, 88.0f);
     p.brightness = finiteOr(p.brightness, 45.0f);
@@ -242,14 +242,21 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         float oscSampleL = 0.0f;
         float oscSampleR = 0.0f;
 
+        // Per-branch phase increments (default: shared values computed above)
+        float adv1 = inc1, adv2 = inc2, advSub = incSub;
+
         if (currentParams.archetype == SynthArchetype::AnalogBrass)
         {
-            // PolyBLEP anti-aliased triple supersaw with wide stereo placement
+            // PolyBLEP anti-aliased triple supersaw with wide stereo placement.
+            // WebAudio reference: third saw sits in the SAME octave at freq*1.004
+            // (not a sub-octave) with a fixed, non complexity-scaled level.
+            const float incSubBrass = phaseIncrement * 1.004f;
             float sawL = getBlepSaw(phase1, inc1);
             float sawR = getBlepSaw(phase2, inc2);
-            float subSaw = getBlepSaw(phaseSub, inc1 * 1.003f);
+            float subSaw = getBlepSaw(phaseSub, incSubBrass);
+            advSub = incSubBrass;
 
-            float subMix = 0.15f + normComplexity * 0.30f;
+            float subMix = 0.09f;
             oscSampleL = sawL * 0.50f + sawR * 0.25f + subSaw * subMix;
             oscSampleR = sawL * 0.25f + sawR * 0.50f + subSaw * subMix;
         }
@@ -258,31 +265,38 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
             // 2-Op Crystalline FM Bells with complexity-driven modulation depth
             float fmIndex = (1.0f + fEnv * 2.5f) * (0.5f + normComplexity * 1.5f);
             float mod = std::sin(phaseMod * juce::MathConstants<float>::twoPi) * fmIndex;
-            float carrierL = std::sin((phase1 + mod * 0.25f) * juce::MathConstants<float>::twoPi);
-            float carrierR = std::sin((phase2 + mod * 0.25f) * juce::MathConstants<float>::twoPi);
+            // WebAudio reference uses square carriers; wrap modulated phase into [0,1)
+            auto wrap01 = [](float p) { return p - std::floor(p); };
+            float carrierL = getBlepSquare(wrap01(phase1 + mod * 0.25f), inc1);
+            float carrierR = getBlepSquare(wrap01(phase2 + mod * 0.25f), inc2);
             float bellSub  = getBlepSquare(phaseSub, incSub);
 
-            oscSampleL = carrierL * 0.65f + bellSub * 0.25f;
-            oscSampleR = carrierR * 0.65f + bellSub * 0.25f;
+            oscSampleL = carrierL * 0.65f + bellSub * 0.08f;
+            oscSampleR = carrierR * 0.65f + bellSub * 0.08f;
         }
         else
         {
             // Hybrid Wavetable: Bandlimited Saw + Detuned Square + Sub-Octave Square
-            float saw1   = getBlepSaw(phase1, inc1);
-            float sqr2   = getBlepSquare(phase2, inc2);
+            // WebAudio reference: osc1 at exact pitch, osc2 detuned upward only.
+            const float incH1 = phaseIncrement;
+            const float incH2 = phaseIncrement * detuneUp * detuneUp;
+            float saw1   = getBlepSaw(phase1, incH1);
+            float sqr2   = getBlepSquare(phase2, incH2);
             float subSqr = getBlepSquare(phaseSub, incSub);
+            adv1 = incH1;
+            adv2 = incH2;
 
             float sqrMix = 0.25f + normComplexity * 0.25f;
-            oscSampleL = saw1 * 0.50f + sqr2 * sqrMix + subSqr * 0.20f;
-            oscSampleR = saw1 * 0.40f + sqr2 * (sqrMix + 0.10f) + subSqr * 0.20f;
+            oscSampleL = saw1 * 0.50f + sqr2 * sqrMix + subSqr * 0.09f;
+            oscSampleR = saw1 * 0.40f + sqr2 * (sqrMix + 0.10f) + subSqr * 0.09f;
         }
 
         // Advance oscillator phases
-        phase1 += inc1;
+        phase1 += adv1;
         if (phase1 >= 1.0f) phase1 -= 1.0f;
-        phase2 += inc2;
+        phase2 += adv2;
         if (phase2 >= 1.0f) phase2 -= 1.0f;
-        phaseSub += incSub;
+        phaseSub += advSub;
         if (phaseSub >= 1.0f) phaseSub -= 1.0f;
         phaseMod += incMod;
         if (phaseMod >= 1.0f) phaseMod -= 1.0f;
@@ -316,7 +330,7 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         }
 
         // Voice envelope and velocity scaling
-        float voiceGain = envGain * currentVelocity * 0.90f;
+        float voiceGain = envGain * currentVelocity * 0.30f;
         float sampleL = outL * voiceGain;
         float sampleR = outR * voiceGain;
 

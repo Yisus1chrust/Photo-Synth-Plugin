@@ -23,95 +23,56 @@ void SynthVoice::prepare(double sampleRate, int /*samplesPerBlock*/)
     currentSampleRate = (sampleRate > 1000.0) ? sampleRate : 44100.0;
     ampEnv.setSampleRate(currentSampleRate);
     filterEnv.setSampleRate(currentSampleRate);
+
+    // Known, silent starting state. The patch (currentParams) is intentionally NOT
+    // overwritten here: prepare() can be called by the host at any time
+    // (sample-rate change, re-activation) and must not throw away the active preset.
+    ampEnv.reset();
+    filterEnv.reset();
+    phase1 = phase2 = phaseSub = phaseMod = lfoPhase = 0.0f;
     filterS1[0] = filterS1[1] = 0.0f;
     filterS2[0] = filterS2[1] = 0.0f;
+    pitchBendRatio = 1.0f;
 
-    // Set immediate playable default ADSR parameters
-    juce::ADSR::Parameters ampParams;
-    ampParams.attack  = 0.015f;
-    ampParams.decay   = 0.35f;
-    ampParams.sustain = 0.80f;
-    ampParams.release = 0.30f;
-    ampEnv.setParameters(ampParams);
-
-    juce::ADSR::Parameters fParams;
-    fParams.attack  = 0.015f;
-    fParams.decay   = 0.40f;
-    fParams.sustain = 0.60f;
-    fParams.release = 0.30f;
-    filterEnv.setParameters(fParams);
-
-    // Default currentParams to playable HybridWavetable archetype
-    currentParams.cutoff     = 2000.0f;
-    currentParams.resonance  = 1.0f;
-    currentParams.attack     = 0.015f;
-    currentParams.decay      = 0.35f;
-    currentParams.sustain    = 0.80f;
-    currentParams.release    = 0.30f;
-    currentParams.color      = 88.0f;
-    currentParams.brightness = 45.0f;
-    currentParams.saturation = 83.0f;
-    currentParams.complexity = 52.0f;
-    currentParams.archetype  = SynthArchetype::HybridWavetable;
+    sanitise(currentParams);
+    applyEnvelopeParams();
 }
 
-void SynthVoice::updatePatch(const VoiceParams& params)
+void SynthVoice::sanitise(VoiceParams& p)
 {
-    currentParams = params;
+    auto finiteOr = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
 
+    p.cutoff     = finiteOr(p.cutoff, 2000.0f);
+    if (p.cutoff <= 20.0f || p.cutoff > 20000.0f) p.cutoff = 2000.0f;
+    p.resonance  = finiteOr(p.resonance, 1.0f);
+    if (p.resonance <= 0.0f) p.resonance = 1.0f;
+    p.attack     = finiteOr(p.attack, 0.015f);
+    if (p.attack <= 0.0f) p.attack = 0.015f;
+    p.decay      = finiteOr(p.decay, 0.35f);
+    if (p.decay <= 0.0f) p.decay = 0.35f;
+    p.sustain    = finiteOr(p.sustain, 0.70f);
+    if (p.sustain <= 0.0f) p.sustain = 0.70f;
+    p.release    = finiteOr(p.release, 0.30f);
+    if (p.release <= 0.0f) p.release = 0.30f;
+    p.lfoRate    = juce::jlimit(0.0f, 50.0f, finiteOr(p.lfoRate, 2.0f));
+    p.lfoDepth   = juce::jlimit(0.0f, 1.0f, finiteOr(p.lfoDepth, 0.2f));
+    p.drive      = juce::jlimit(0.0f, 1.0f, finiteOr(p.drive, 0.0f));
+    p.color      = finiteOr(p.color, 88.0f);
+    p.brightness = finiteOr(p.brightness, 45.0f);
+    p.saturation = finiteOr(p.saturation, 83.0f);
+    p.complexity = finiteOr(p.complexity, 52.0f);
+
+    if (p.archetype != SynthArchetype::AnalogBrass &&
+        p.archetype != SynthArchetype::DigitalFmBells &&
+        p.archetype != SynthArchetype::HybridWavetable)
+    {
+        p.archetype = SynthArchetype::HybridWavetable;
+    }
+}
+
+void SynthVoice::applyEnvelopeParams()
+{
     // ADSR settings: 12ms attack floor prevents waveform step clicks
-    juce::ADSR::Parameters ampParams;
-    ampParams.attack  = juce::jmax(0.012f, params.attack);
-    ampParams.decay   = juce::jmax(0.02f, params.decay);
-    ampParams.sustain = juce::jlimit(0.05f, 1.0f, params.sustain);
-    ampParams.release = juce::jmax(0.02f, params.release);
-    ampEnv.setParameters(ampParams);
-
-    juce::ADSR::Parameters fParams;
-    fParams.attack  = juce::jmax(0.012f, params.attack * 0.8f);
-    fParams.decay   = juce::jmax(0.02f, params.decay * 1.2f);
-    fParams.sustain = 0.5f;
-    fParams.release = juce::jmax(0.02f, params.release * 0.8f);
-    filterEnv.setParameters(fParams);
-}
-
-void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int /*currentPitchWheelPosition*/)
-{
-    currentVelocity = juce::jlimit(0.05f, 1.0f, velocity);
-    currentPitchHz = (float)juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
-
-    float sr = (float)(currentSampleRate > 1000.0 ? currentSampleRate : 44100.0);
-    phaseIncrement = currentPitchHz / sr;
-
-    // Surge XT pattern: sync active master patch parameters at note onset
-    if (masterParams != nullptr)
-    {
-        currentParams = *masterParams;
-    }
-
-    // Guard against uninitialized state from external DAW keyboards
-    if (currentParams.cutoff <= 20.0f || currentParams.cutoff > 20000.0f)
-        currentParams.cutoff = 2000.0f;
-    if (currentParams.attack <= 0.0f)
-        currentParams.attack = 0.015f;
-    if (currentParams.decay <= 0.0f)
-        currentParams.decay = 0.35f;
-    if (currentParams.sustain <= 0.0f)
-        currentParams.sustain = 0.70f;
-    if (currentParams.release <= 0.0f)
-        currentParams.release = 0.30f;
-    if (currentParams.resonance <= 0.0f)
-        currentParams.resonance = 1.0f;
-
-    // Ensure valid archetype (default to HybridWavetable if uninitialized)
-    if (currentParams.archetype != SynthArchetype::AnalogBrass &&
-        currentParams.archetype != SynthArchetype::DigitalFmBells &&
-        currentParams.archetype != SynthArchetype::HybridWavetable)
-    {
-        currentParams.archetype = SynthArchetype::HybridWavetable;
-    }
-
-    // Refresh envelope parameters to ensure active preset envelope is applied immediately
     juce::ADSR::Parameters ampParams;
     ampParams.attack  = juce::jmax(0.012f, currentParams.attack);
     ampParams.decay   = juce::jmax(0.02f, currentParams.decay);
@@ -125,6 +86,48 @@ void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::Synthesiser
     fParams.sustain = 0.5f;
     fParams.release = juce::jmax(0.02f, currentParams.release * 0.8f);
     filterEnv.setParameters(fParams);
+}
+
+void SynthVoice::updatePatch(const VoiceParams& params)
+{
+    currentParams = params;
+    sanitise(currentParams);
+    applyEnvelopeParams();
+}
+
+float SynthVoice::pitchWheelToRatio(int pitchWheelValue)
+{
+    // 14-bit pitch wheel: 0..16383, centre 8192
+    const float normalised = juce::jlimit(-1.0f, 1.0f, (float)(pitchWheelValue - 8192) / 8192.0f);
+    return std::pow(2.0f, normalised * pitchBendRangeSemitones / 12.0f);
+}
+
+void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int currentPitchWheelPosition)
+{
+    currentVelocity = juce::jlimit(0.05f, 1.0f, velocity);
+    currentPitchHz = (float)juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
+    pitchBendRatio = pitchWheelToRatio(currentPitchWheelPosition);
+
+    float sr = (float)(currentSampleRate > 1000.0 ? currentSampleRate : 44100.0);
+    phaseIncrement = currentPitchHz * pitchBendRatio / sr;
+
+    // Surge XT pattern: sync active master patch parameters at note onset.
+    // masterParams is owned by PhotoSynthEngine and only written on the audio thread.
+    if (masterParams != nullptr)
+    {
+        currentParams = *masterParams;
+    }
+    else
+    {
+        // Voice was added without PhotoSynthEngine - it would play its last/local patch
+        jassertfalse;
+    }
+
+    // Guard against uninitialised state from external DAW keyboards
+    sanitise(currentParams);
+
+    // Refresh envelope parameters to ensure active preset envelope is applied immediately
+    applyEnvelopeParams();
 
     // Reset modulation phase for punchy transient attack
     phaseMod = 0.0f;
@@ -148,7 +151,11 @@ void SynthVoice::stopNote(float /*velocity*/, bool allowTailOff)
     }
 }
 
-void SynthVoice::pitchWheelMoved(int) {}
+void SynthVoice::pitchWheelMoved(int newPitchWheelValue)
+{
+    pitchBendRatio = pitchWheelToRatio(newPitchWheelValue);
+}
+
 void SynthVoice::controllerMoved(int, int) {}
 
 // PolyBLEP anti-aliasing residual for quasi-bandlimited waveforms (eliminates digital harshness)
@@ -188,7 +195,7 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
     if (numChannels == 0 || numSamples == 0) return;
 
     float sr = (float)(currentSampleRate > 1000.0 ? currentSampleRate : 44100.0);
-    phaseIncrement = currentPitchHz / sr;
+    phaseIncrement = currentPitchHz * pitchBendRatio / sr;
 
     // 1. Color / Timbre DNA Parameter (0.0 to 1.0 or 0 to 360 deg)
     // Directly modulates harmonic unison detune spread & spectral balance
@@ -328,4 +335,111 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
             outputBuffer.addSample(1, startSample + i, sampleR);
         }
     }
+}
+
+
+//==============================================================================
+// PhotoSynthEngine
+//==============================================================================
+
+PhotoSynthEngine::PhotoSynthEngine()
+{
+    buildVoices();
+    // Make the engine playable immediately, even before the host calls prepareToPlay().
+    prepare(44100.0, 512);
+}
+
+void PhotoSynthEngine::buildVoices()
+{
+    synth.clearVoices();
+    synth.clearSounds();
+
+    synth.addSound(new PhotoSynthSound());
+    for (int i = 0; i < numVoices; ++i)
+    {
+        auto* v = new SynthVoice();
+        v->setSharedParams(&sharedParams);
+        v->updatePatch(sharedParams);
+        synth.addVoice(v);
+    }
+
+    // Voice stealing so a held DAW chord never silently drops new notes
+    synth.setNoteStealingEnabled(true);
+}
+
+bool PhotoSynthEngine::validateCustomVoices() const
+{
+    if (synth.getNumSounds() == 0 || synth.getNumVoices() != numVoices)
+        return false;
+
+    auto* sound = synth.getSound(0).get();
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+    {
+        auto* v = dynamic_cast<SynthVoice*>(synth.getVoice(i));
+        if (v == nullptr || ! v->canPlaySound(sound))
+            return false;
+    }
+    return true;
+}
+
+void PhotoSynthEngine::prepare(double sampleRate, int samplesPerBlock)
+{
+    const double sr = (sampleRate > 1000.0) ? sampleRate : 44100.0;
+
+    // There is no generic fallback voice in this plugin: if the custom voices are
+    // missing or cannot play PhotoSynthSound, juce::Synthesiser would silently drop
+    // every note. Detect it loudly and rebuild once.
+    if (! validateCustomVoices())
+    {
+        DBG("PhotoSynthEngine: custom SynthVoice pool invalid ("
+            << synth.getNumVoices() << " voices, " << synth.getNumSounds()
+            << " sounds) - rebuilding custom voices");
+        jassertfalse;
+        buildVoices();
+    }
+
+    ready = validateCustomVoices();
+    if (! ready)
+    {
+        DBG("PhotoSynthEngine: FAILED to initialise custom SynthVoice engine - notes will be silent");
+        jassertfalse;
+    }
+
+    synth.setCurrentPlaybackSampleRate(sr);
+    synth.allNotesOff(0, false);
+
+    SynthVoice::sanitise(sharedParams);
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+    {
+        if (auto* v = dynamic_cast<SynthVoice*>(synth.getVoice(i)))
+        {
+            v->setSharedParams(&sharedParams);
+            v->updatePatch(sharedParams);
+            v->prepare(sr, samplesPerBlock);
+        }
+    }
+}
+
+void PhotoSynthEngine::reset()
+{
+    synth.allNotesOff(0, false);
+}
+
+void PhotoSynthEngine::setPatch(const VoiceParams& params)
+{
+    sharedParams = params;
+    SynthVoice::sanitise(sharedParams);
+
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+        if (auto* v = dynamic_cast<SynthVoice*>(synth.getVoice(i)))
+            v->updatePatch(sharedParams);
+}
+
+void PhotoSynthEngine::render(juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi, int startSample, int numSamples)
+{
+    jassert(ready);
+    // juce::Synthesiser walks the MidiBuffer and splits the block at every event,
+    // calling noteOn / noteOff / handlePitchWheel / handleController / allNotesOff
+    // at the exact sample position, then renders our SynthVoices in between.
+    synth.renderNextBlock(buffer, midi, startSample, numSamples);
 }

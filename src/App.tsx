@@ -130,6 +130,9 @@ export default function App() {
   const [selectedColorPoints, setSelectedColorPoints] = useState<SelectedColorPoint[]>([]);
   const [presetToDeleteId, setPresetToDeleteId] = useState<string | null>(null);
   const initialLoadDone = useRef(false);
+  // Plugin mode: set once the initial C++ state has been adopted/pushed. Before that the
+  // auto-sync below must not overwrite a restored DAW state with UI defaults.
+  const nativeReadyRef = useRef(false);
 
   // Helper to process image source into compact base64 data & metrics
   // Image analysis & loading pipeline
@@ -342,130 +345,104 @@ export default function App() {
     if (initialLoadDone.current) return;
     initialLoadDone.current = true;
 
-    // Immediately prime WebAudio engine with default Synthwave Sunset patch
-    globalAudioEngine.updateParameters(defaultSlotA.patch);
+    // Web preview: prime the browser WebAudio engine with the default patch.
     if (!pluginBridge.isNativeEnvironment()) {
+      globalAudioEngine.updateParameters(defaultSlotA.patch);
       pluginBridge.syncFullPatch(defaultSlotA.patch, defaultSlotA.metrics);
-      pluginBridge.syncSlotImage('A', defaultSlotA.dataUrl, defaultSlotA.title);
-      pluginBridge.syncSlotImage('B', defaultSlotB.dataUrl, defaultSlotB.title);
     }
 
     (async () => {
       await pluginBridge.initNativeBridge();
+      if (!pluginBridge.isNativeEnvironment()) return;
 
-      if (pluginBridge.isNativeEnvironment()) {
+      // Plugin mode: the C++ engine is the ONLY sound source, so it must always hold the
+      // photo-derived patch the UI shows. Either adopt the state C++ already has (saved
+      // DAW project / editor reopened) or push the UI defaults into C++.
+      let init: any = null;
+      try {
+        init = await pluginBridge.getInitialState();
+      } catch (err) {
+        console.warn('getInitialState failed:', err);
+      }
+      if (!isMounted) return;
+
+      if (init && typeof init.bpm === 'number' && init.bpm > 0) {
+        setBpm(init.bpm);
+        setBpmInputVal(String(Math.round(init.bpm)));
+      }
+
+      const loadSaved = async (url: any, name: any, slot: 'A' | 'B'): Promise<SlotData | null> => {
+        if (typeof url !== 'string' || url.length < 100) return null;
         try {
-          const init = await pluginBridge.getInitialState();
-          if (init && typeof init === 'object' && isMounted) {
-            if (init.bpm && typeof init.bpm === 'number') {
-              setBpm(init.bpm);
-              setBpmInputVal(String(Math.round(init.bpm)));
-            }
-
-            if (typeof init.morph === 'number') {
-              setMorphValue(init.morph);
-            }
-
-            let loadedA: SlotData | null = null;
-            let loadedB: SlotData | null = null;
-
-            // Slot A: If custom image saved, restore it
-            if (init.slotADataUrl && init.slotADataUrl.length > 100) {
-              try {
-                const dataA = await processImageSourceToData(init.slotADataUrl, init.slotAName || 'Image A');
-                loadedA = {
-                  id: 'slot-a-native',
-                  title: init.slotAName || 'Image A',
-                  dataUrl: dataA.dataUrl,
-                  metrics: dataA.metrics,
-                  patch: dataA.patch,
-                };
-                setSlotA(loadedA);
-                setImagePreviewUrl(dataA.dataUrl);
-              } catch (errA) {
-                console.warn('Slot A image load note:', errA);
-              }
-            }
-
-            // Slot B: If custom image saved, restore it
-            if (init.slotBDataUrl && init.slotBDataUrl.length > 100) {
-              try {
-                const dataB = await processImageSourceToData(init.slotBDataUrl, init.slotBName || 'Image B');
-                loadedB = {
-                  id: 'slot-b-native',
-                  title: init.slotBName || 'Image B',
-                  dataUrl: dataB.dataUrl,
-                  metrics: dataB.metrics,
-                  patch: dataB.patch,
-                };
-                setSlotB(loadedB);
-              } catch (errB) {
-                console.warn('Slot B image load note:', errB);
-              }
-            }
-
-            const effectiveMorph = typeof init.morph === 'number' ? init.morph : 0.0;
-            let basePatch: PatchParameters | null = null;
-            let baseMetrics: ImageMetrics | null = null;
-
-            if (loadedA && loadedB) {
-              basePatch = interpolatePatchParameters(loadedA.patch, loadedB.patch, effectiveMorph);
-              baseMetrics = interpolateImageMetrics(loadedA.metrics, loadedB.metrics, effectiveMorph);
-            } else if (loadedA) {
-              basePatch = loadedA.patch;
-              baseMetrics = loadedA.metrics;
-            } else if (loadedB) {
-              basePatch = loadedB.patch;
-              baseMetrics = loadedB.metrics;
-            }
-
-            // Restore morphed patch and overlay APVTS parameters so user's DAW edits are preserved
-            if (basePatch && init.parameters && typeof init.parameters === 'object') {
-              const p = init.parameters;
-              const pArch = p.archetype !== undefined ? Math.round(p.archetype) : undefined;
-              const engineType = pArch === 1 ? 'digital_fm_bells' : pArch === 2 ? 'hybrid_wavetable' : (pArch === 0 ? 'analog_brass' : basePatch.engineType);
-
-              const restoredEffects = { ...(basePatch.effects || createDefaultEffects()) };
-              if (p.delayEnabled !== undefined) restoredEffects.delay = { ...restoredEffects.delay, enabled: p.delayEnabled > 0.5, intensity: p.delayMix ?? restoredEffects.delay.intensity };
-              if (p.reverbEnabled !== undefined) restoredEffects.reverb = { ...restoredEffects.reverb, enabled: p.reverbEnabled > 0.5, intensity: p.reverbMix ?? restoredEffects.reverb.intensity };
-              if (p.chorusEnabled !== undefined) restoredEffects.chorus = { ...restoredEffects.chorus, enabled: p.chorusEnabled > 0.5, intensity: p.chorusMix ?? restoredEffects.chorus.intensity };
-              if (p.phaserEnabled !== undefined) restoredEffects.phaser = { ...restoredEffects.phaser, enabled: p.phaserEnabled > 0.5, intensity: p.phaserMix ?? restoredEffects.phaser.intensity };
-              if (p.flangerEnabled !== undefined) restoredEffects.flanger = { ...restoredEffects.flanger, enabled: p.flangerEnabled > 0.5, intensity: p.flangerMix ?? restoredEffects.flanger.intensity };
-              if (p.distortionEnabled !== undefined) restoredEffects.distortion = { ...restoredEffects.distortion, enabled: p.distortionEnabled > 0.5, intensity: p.distortionMix ?? restoredEffects.distortion.intensity };
-
-              basePatch = {
-                ...basePatch,
-                engineType: engineType as any,
-                cutoffOffset: p.cutoff !== undefined ? p.cutoff : basePatch.cutoffOffset,
-                resonance: p.resonance !== undefined ? p.resonance : basePatch.resonance,
-                lfoRate: p.lfoRate !== undefined ? p.lfoRate : basePatch.lfoRate,
-                lfoDepth: p.lfoDepth !== undefined ? p.lfoDepth : basePatch.lfoDepth,
-                masterVolume: p.volume !== undefined ? p.volume : basePatch.masterVolume,
-                attackTime: p.attack !== undefined ? p.attack : basePatch.attackTime,
-                decayTime: p.decay !== undefined ? p.decay : basePatch.decayTime,
-                sustainLevel: p.sustain !== undefined ? p.sustain : basePatch.sustainLevel,
-                releaseTime: p.release !== undefined ? p.release : basePatch.releaseTime,
-                limiterEnabled: p.limiter !== undefined ? p.limiter > 0.5 : basePatch.limiterEnabled,
-                threshold: p.threshold !== undefined ? p.threshold : basePatch.threshold,
-                effects: restoredEffects,
-              };
-            }
-
-            if (basePatch && isMounted) {
-              setPatch(basePatch);
-              setBaselinePatch(basePatch);
-              globalAudioEngine.updateParameters(basePatch);
-            }
-            if (baseMetrics && isMounted) {
-              setMetrics(baseMetrics);
-            }
-
-            setAudioStarted(true);
-            return;
-          }
-        } catch (err) {
-          console.warn('Initial native state restoration note:', err);
+          const d = await processImageSourceToData(url, name || `Image ${slot}`);
+          return { id: `slot-${slot.toLowerCase()}-native`, title: d.title, dataUrl: d.dataUrl, metrics: d.metrics, patch: d.patch };
+        } catch (e) {
+          console.warn(`Slot ${slot} restore failed:`, e);
+          return null;
         }
+      };
+
+      const loadedA = init ? await loadSaved(init.slotADataUrl, init.slotAName, 'A') : null;
+      const loadedB = init ? await loadSaved(init.slotBDataUrl, init.slotBName, 'B') : null;
+      if (!isMounted) return;
+
+      const effA = loadedA || defaultSlotA;
+      const effB = loadedB || defaultSlotB;
+      const hasState = !!(init && init.hasState);
+      const effectiveMorph = hasState && typeof init.morph === 'number' ? Math.max(0, Math.min(1, init.morph)) : 0.0;
+
+      let basePatch: PatchParameters = interpolatePatchParameters(effA.patch, effB.patch, effectiveMorph);
+      const baseMetrics: ImageMetrics = interpolateImageMetrics(effA.metrics, effB.metrics, effectiveMorph);
+
+      // Saved project / reopened editor: overlay the APVTS values (real units) so DAW
+      // edits and automation survive.
+      if (hasState && init.parameters && typeof init.parameters === 'object') {
+        const p = init.parameters;
+        const n = (v: any, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+        const pArch = typeof p.archetype === 'number' ? Math.round(p.archetype) : undefined;
+        const engineType = pArch === 1 ? 'digital_fm_bells' : pArch === 2 ? 'hybrid_wavetable' : pArch === 0 ? 'analog_brass' : basePatch.engineType;
+        const fx = { ...(basePatch.effects || createDefaultEffects()) };
+        const keys: (keyof ImageEffectsState)[] = ['delay', 'reverb', 'chorus', 'phaser', 'flanger', 'distortion'];
+        keys.forEach((k) => {
+          const en = p[`${k}Enabled`];
+          if (typeof en === 'number') fx[k] = { ...fx[k], enabled: en > 0.5 };
+        });
+        basePatch = {
+          ...basePatch,
+          engineType: engineType as any,
+          cutoffOffset: n(p.cutoff, basePatch.cutoffOffset),
+          resonance: n(p.resonance, basePatch.resonance),
+          lfoRate: n(p.lfoRate, basePatch.lfoRate),
+          lfoDepth: n(p.lfoDepth, basePatch.lfoDepth),
+          masterVolume: n(p.volume, basePatch.masterVolume),
+          attackTime: n(p.attack, basePatch.attackTime),
+          decayTime: n(p.decay, basePatch.decayTime),
+          sustainLevel: n(p.sustain, basePatch.sustainLevel),
+          releaseTime: n(p.release, basePatch.releaseTime),
+          limiterEnabled: typeof p.limiter === 'number' ? p.limiter > 0.5 : basePatch.limiterEnabled,
+          threshold: n(p.threshold, basePatch.threshold),
+          effects: fx,
+        };
+      }
+
+      setSlotA(effA);
+      setSlotB(effB);
+      setImagePreviewUrl(effA.dataUrl);
+      setMorphValue(effectiveMorph);
+      setPatch(basePatch);
+      setBaselinePatch(basePatch);
+      setMetrics(baseMetrics);
+
+      // Push photos (only ones C++ does not already hold) and the full patch into C++.
+      const syncs: Promise<any>[] = [];
+      if (!loadedA) syncs.push(pluginBridge.syncSlotImage('A', effA.dataUrl, effA.title));
+      if (!loadedB) syncs.push(pluginBridge.syncSlotImage('B', effB.dataUrl, effB.title));
+      syncs.push(pluginBridge.syncFullPatch(basePatch, baseMetrics, effectiveMorph));
+      await Promise.all(syncs);
+
+      if (isMounted) {
+        nativeReadyRef.current = true;
+        setAudioStarted(true);
       }
     })();
 
@@ -495,6 +472,20 @@ export default function App() {
     };
   }, []);
 
+  // Plugin-mode safety net: whenever the photo-driven patch, metrics or morph change
+  // (effect toggles / effect params, presets, colour points, resets, ...) push the
+  // complete patch to the C++ engine (trailing 30 ms coalescing). The auto-sweep loop
+  // syncs itself at ~20 Hz, so it is skipped while sweeping.
+  const nativeSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!pluginBridge.isNativeEnvironment() || !nativeReadyRef.current || !patch || isAutoSweeping) return;
+    if (nativeSyncTimer.current) clearTimeout(nativeSyncTimer.current);
+    nativeSyncTimer.current = setTimeout(() => {
+      nativeSyncTimer.current = null;
+      pluginBridge.syncFullPatch(patch, metrics, morphValue);
+    }, 30);
+  }, [patch, metrics, morphValue, isAutoSweeping]);
+
   // Morph slider change handler
   const handleMorphChange = useCallback(
     (val: number) => {
@@ -504,8 +495,8 @@ export default function App() {
         const morphedM = interpolateImageMetrics(slotA.metrics, slotB.metrics, val);
         setPatch(morphedP);
         setMetrics(morphedM);
-        globalAudioEngine.updateParameters(morphedP);
-        pluginBridge.syncFullPatch(morphedP, morphedM);
+        if (!pluginBridge.isNativeEnvironment()) globalAudioEngine.updateParameters(morphedP);
+        pluginBridge.syncFullPatch(morphedP, morphedM, val);
       }
     },
     [slotA, slotB]
@@ -522,6 +513,7 @@ export default function App() {
     }
 
     let lastTime = performance.now();
+    let lastNativeSweepSync = 0;
     const loop = (now: number) => {
       const delta = (now - lastTime) / 1000;
       lastTime = now;
@@ -542,7 +534,13 @@ export default function App() {
         const morphedM = interpolateImageMetrics(slotA.metrics, slotB.metrics, newMorph);
         setPatch(morphedP);
         setMetrics(morphedM);
-        globalAudioEngine.updateParameters(morphedP);
+        if (!pluginBridge.isNativeEnvironment()) {
+          globalAudioEngine.updateParameters(morphedP);
+        } else if (now - lastNativeSweepSync >= 50) {
+          // ~20 Hz to C++ - enough for a smooth audible sweep without flooding the WebView bridge
+          lastNativeSweepSync = now;
+          pluginBridge.syncFullPatch(morphedP, morphedM, newMorph);
+        }
       }
 
       animRef.current = requestAnimationFrame(loop);
@@ -569,6 +567,7 @@ export default function App() {
       };
       setSlotA(newSlotA);
       setImagePreviewUrl(userMatch.dataUrl);
+      pluginBridge.syncSlotImage('A', userMatch.dataUrl, userMatch.title);
       if (slotB) {
         const morphedP = interpolatePatchParameters(newSlotA.patch, slotB.patch, morphValue);
         const morphedM = interpolateImageMetrics(newSlotA.metrics, slotB.metrics, morphValue);
@@ -886,6 +885,8 @@ export default function App() {
       setSlotA(safeDeepClone(target.slotA));
       setSlotB(safeDeepClone(target.slotB));
       setImagePreviewUrl(target.slotA.dataUrl);
+      pluginBridge.syncSlotImage('A', target.slotA.dataUrl, target.slotA.title);
+      pluginBridge.syncSlotImage('B', target.slotB.dataUrl, target.slotB.title);
       if (typeof target.morphValue === 'number') {
         setMorphValue(target.morphValue);
       }
@@ -896,7 +897,7 @@ export default function App() {
         setPatch(safeDeepClone(target.customPatch));
         setBaselinePatch(safeDeepClone(target.customPatch));
         globalAudioEngine.updateParameters(target.customPatch);
-        pluginBridge.syncFullPatch(target.customPatch, target.customMetrics);
+        pluginBridge.syncFullPatch(target.customPatch, target.customMetrics, target.morphValue);
       }
       if (target.customMetrics) {
         setMetrics(safeDeepClone(target.customMetrics));
@@ -936,13 +937,15 @@ export default function App() {
         setSlotB(newSlotB);
         setImagePreviewUrl(dataA.dataUrl);
         setMorphValue(0.0);
+        pluginBridge.syncSlotImage('A', dataA.dataUrl, dataA.title);
+        pluginBridge.syncSlotImage('B', dataB.dataUrl, dataB.title);
 
         setPatch(dataA.patch);
         setBaselinePatch(dataA.patch);
         setMetrics(dataA.metrics);
         setSelectedColorPoints([]);
         globalAudioEngine.updateParameters(dataA.patch);
-        pluginBridge.syncFullPatch(dataA.patch, dataA.metrics);
+        pluginBridge.syncFullPatch(dataA.patch, dataA.metrics, 0.0);
       } catch (err) {
         console.error('Failed to load preset:', err);
       } finally {
@@ -965,6 +968,11 @@ export default function App() {
     if (!patch) return;
     const updated = { ...patch, [key]: value };
     setPatch(updated);
+    if (pluginBridge.isNativeEnvironment()) {
+      // Full sync: also covers non-numeric fields (engineType -> archetype, effects, ...)
+      pluginBridge.syncFullPatch(updated, metrics, morphValue);
+      return;
+    }
     globalAudioEngine.updateParameters(updated);
     if (typeof value === 'number') {
       pluginBridge.setParameter(key as string, value);
@@ -987,9 +995,13 @@ export default function App() {
       setIsLicenseModalOpen(true);
       return;
     }
-    await globalAudioEngine.initAudio();
+    if (!pluginBridge.isNativeEnvironment()) {
+      await globalAudioEngine.initAudio();
+    }
     if (patch) {
-      globalAudioEngine.updateParameters(patch);
+      if (!pluginBridge.isNativeEnvironment()) {
+        globalAudioEngine.updateParameters(patch);
+      }
       pluginBridge.syncFullPatch(patch, metrics);
     }
     setAudioStarted(true);
@@ -1003,9 +1015,13 @@ export default function App() {
       }
       if (!audioStarted) {
         setAudioStarted(true);
-        globalAudioEngine.initAudio().catch(() => {});
+        if (!pluginBridge.isNativeEnvironment()) {
+          globalAudioEngine.initAudio().catch(() => {});
+        }
         if (patch) {
-          globalAudioEngine.updateParameters(patch);
+          if (!pluginBridge.isNativeEnvironment()) {
+            globalAudioEngine.updateParameters(patch);
+          }
           pluginBridge.syncFullPatch(patch, metrics);
         }
       }

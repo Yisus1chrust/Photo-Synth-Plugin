@@ -269,8 +269,9 @@ class HybridPluginBridge {
       this.callNative('setParameter', nativeParamId, value);
     }
 
-    // 2. Always keep web engine in sync as well
-    if (typeof value === 'number' && Number.isFinite(value)) {
+    // 2. Keep the browser WebAudio engine in sync only when it is the active engine
+    //    (web preview). In plugin mode the C++ engine is the sole sound source.
+    if (!this.isConnectedToNative && typeof value === 'number' && Number.isFinite(value)) {
       const webParamKey = paramId === 'cutoff' ? 'cutoffOffset' :
                           paramId === 'attack' ? 'attackTime' :
                           paramId === 'decay' ? 'decayTime' :
@@ -315,10 +316,14 @@ class HybridPluginBridge {
     if (this.isConnectedToNative) {
       this.callNative('noteOn', midiNote, velocity);
     }
-    // WebAudio engine ensures immediate responsive audio feedback on-screen
-    try {
-      globalAudioEngine.noteOn(midiNote, velocity);
-    } catch {}
+    // Browser WebAudio engine plays ONLY outside the plugin. Inside a DAW/standalone
+    // plugin, on-screen keys must go through the same C++ engine as host MIDI,
+    // otherwise two different synths are heard.
+    if (!this.isConnectedToNative) {
+      try {
+        globalAudioEngine.noteOn(midiNote, velocity);
+      } catch {}
+    }
   }
 
   /**
@@ -328,9 +333,11 @@ class HybridPluginBridge {
     if (this.isConnectedToNative) {
       this.callNative('noteOff', midiNote);
     }
-    try {
-      globalAudioEngine.noteOff(midiNote);
-    } catch {}
+    if (!this.isConnectedToNative) {
+      try {
+        globalAudioEngine.noteOff(midiNote);
+      } catch {}
+    }
   }
 
   /**
@@ -433,8 +440,10 @@ class HybridPluginBridge {
       this.nativeFunctions.get('syncPatch')!(paramMap).catch(() => {});
     }
 
-    // Always keep web audio in sync with the latest patch
-    globalAudioEngine.updateParameters(patch);
+    // Keep web audio in sync only when it is the active engine (not in plugin mode)
+    if (!this.isConnectedToNative) {
+      globalAudioEngine.updateParameters(patch);
+    }
   }
 
   /**
@@ -444,7 +453,9 @@ class HybridPluginBridge {
     for (let note = 0; note < 128; note++) {
       this.noteOff(note);
     }
-    globalAudioEngine.panic();
+    if (!this.isConnectedToNative) {
+      globalAudioEngine.panic();
+    }
   }
 
   // ============================================================================

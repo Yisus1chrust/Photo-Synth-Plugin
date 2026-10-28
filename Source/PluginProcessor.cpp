@@ -431,6 +431,9 @@ void PhotoSynthAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         xml->setAttribute ("slotAName", slotAName);
         xml->setAttribute ("slotBName", slotBName);
         xml->setAttribute ("currentBpm", (double) currentBpm);
+        // The user's photos (UI-downscaled JPEG data URLs, typically < 150 KB each).
+        if (slotAFrontendDataUrl.isNotEmpty()) xml->setAttribute ("slotADataUrl", slotAFrontendDataUrl);
+        if (slotBFrontendDataUrl.isNotEmpty()) xml->setAttribute ("slotBDataUrl", slotBFrontendDataUrl);
 
         copyXmlToBinary (*xml, destData);
     }
@@ -455,11 +458,22 @@ void PhotoSynthAudioProcessor::setStateInformation (const void* data, int sizeIn
         if (xmlState->hasAttribute ("currentBpm"))
             currentBpm.store ((float) xmlState->getDoubleAttribute ("currentBpm", 120.0));
 
-        // Restore the factory-preset images (and therefore their analysis/archetype)
-        // when the saved slot names match, so a reopened DAW project sounds the same
-        // without the UI having to re-sync.
-        if (const int idxA = presetIndexForName (slotAName); idxA >= 0) loadSlotAPreset (idxA);
-        if (const int idxB = presetIndexForName (slotBName); idxB >= 0) loadSlotBPreset (idxB);
+        // Restore the slot photos (and therefore their analysis) so a reopened DAW
+        // project sounds the same without the UI having to re-sync. Prefer the saved
+        // user photos; fall back to the factory preset renders for older projects.
+        const auto savedA = xmlState->getStringAttribute ("slotADataUrl");
+        const auto savedB = xmlState->getStringAttribute ("slotBDataUrl");
+        const auto restoredNameA = slotAName, restoredNameB = slotBName;
+        slotAFrontendDataUrl.clear();
+        slotBFrontendDataUrl.clear();
+
+        if (! (savedA.isNotEmpty() && syncSlotImageFromFrontend ("A", savedA, restoredNameA)))
+            if (const int idxA = presetIndexForName (slotAName); idxA >= 0) loadSlotAPreset (idxA);
+        if (! (savedB.isNotEmpty() && syncSlotImageFromFrontend ("B", savedB, restoredNameB)))
+            if (const int idxB = presetIndexForName (slotBName); idxB >= 0) loadSlotBPreset (idxB);
+
+        // The restored APVTS is a deliberate patch: the UI must adopt it, not overwrite it.
+        frontendStateKnown = true;
 
         // Message thread: only publish data. The audio thread picks the new patch up
         // at the start of its next processBlock (no direct voice mutation from here).
@@ -557,6 +571,7 @@ juce::Image PhotoSynthAudioProcessor::getBlendedImage()
 
 juce::String PhotoSynthAudioProcessor::getImageSlotAAsDataUrl() const
 {
+    if (slotAFrontendDataUrl.isNotEmpty()) return slotAFrontendDataUrl;
     if (!imageSlotA.isValid()) return {};
     juce::MemoryOutputStream mos;
     juce::PNGImageFormat pngFormat;
@@ -566,6 +581,7 @@ juce::String PhotoSynthAudioProcessor::getImageSlotAAsDataUrl() const
 
 juce::String PhotoSynthAudioProcessor::getImageSlotBAsDataUrl() const
 {
+    if (slotBFrontendDataUrl.isNotEmpty()) return slotBFrontendDataUrl;
     if (!imageSlotB.isValid()) return {};
     juce::MemoryOutputStream mos;
     juce::PNGImageFormat pngFormat;
@@ -573,27 +589,116 @@ juce::String PhotoSynthAudioProcessor::getImageSlotBAsDataUrl() const
     return "data:image/png;base64," + juce::Base64::toBase64 (mos.getData(), mos.getDataSize());
 }
 
-void PhotoSynthAudioProcessor::syncSlotImageFromFrontend (const juce::String& slot, const juce::String& dataUrl, const juce::String& name)
+static juce::Image decodeDataUrlImage (const juce::String& dataUrl)
 {
-    int commaIdx = dataUrl.indexOf (",");
-    if (commaIdx >= 0) {
-        juce::String base64Data = dataUrl.substring (commaIdx + 1);
-        juce::MemoryOutputStream mos;
-        if (juce::Base64::convertFromBase64 (mos, base64Data)) {
-            juce::MemoryInputStream mis (mos.getData(), mos.getDataSize(), false);
-            juce::PNGImageFormat pngFormat;
-            juce::Image decodedImg = pngFormat.decodeImage (mis);
-            if (!decodedImg.isValid()) {
-                juce::JPEGImageFormat jpegFormat;
-                mis.setPosition (0);
-                decodedImg = jpegFormat.decodeImage (mis);
-            }
-            if (decodedImg.isValid()) {
-                if (slot == "A") loadSlotAImage (decodedImg, name);
-                else loadSlotBImage (decodedImg, name);
-            }
+    const int commaIdx = dataUrl.indexOf (",");
+    if (commaIdx < 0)
+        return {};
+
+    juce::MemoryOutputStream mos;
+    if (! juce::Base64::convertFromBase64 (mos, dataUrl.substring (commaIdx + 1)))
+        return {};
+
+    // Auto-detects PNG / JPEG / GIF (the UI sends canvas JPEGs).
+    return juce::ImageFileFormat::loadFrom (mos.getData(), mos.getDataSize());
+}
+
+bool PhotoSynthAudioProcessor::syncSlotImageFromFrontend (const juce::String& slot, const juce::String& dataUrl, const juce::String& name)
+{
+    const auto decodedImg = decodeDataUrlImage (dataUrl);
+    if (! decodedImg.isValid())
+    {
+        DBG ("PhotoSynth: syncSlotImage could not decode image for slot " << slot);
+        return false;
+    }
+
+    if (slot == "B")
+    {
+        slotBFrontendDataUrl = dataUrl;
+        loadSlotBImage (decodedImg, name);
+    }
+    else
+    {
+        slotAFrontendDataUrl = dataUrl;
+        loadSlotAImage (decodedImg, name);
+    }
+    return true;
+}
+
+int PhotoSynthAudioProcessor::applyFrontendPatch (const juce::var& patchObject)
+{
+    auto* obj = patchObject.getDynamicObject();
+    if (obj == nullptr)
+        return 0;
+
+    int numSet = 0;
+    bool morphChanged = false;
+
+    for (const auto& prop : obj->getProperties())
+    {
+        juce::String paramId = prop.name.toString();
+
+        // Accept the WebAudio patch key names as aliases.
+        if (paramId == "cutoffOffset")        paramId = "cutoff";
+        else if (paramId == "attackTime")     paramId = "attack";
+        else if (paramId == "decayTime")      paramId = "decay";
+        else if (paramId == "sustainLevel")   paramId = "sustain";
+        else if (paramId == "releaseTime")    paramId = "release";
+        else if (paramId == "masterVolume")   paramId = "volume";
+        else if (paramId == "limiterEnabled") paramId = "limiter";
+
+        const auto& v = prop.value;
+        if (! (v.isDouble() || v.isInt() || v.isInt64() || v.isBool()))
+            continue;
+
+        const float value = static_cast<float> ((double) v);
+        if (! std::isfinite (value))
+            continue;
+
+        // NOTE: no "<= 1 means normalised" auto-scaling here. PluginBridge.syncFullPatch
+        // always sends APVTS units, and the old heuristic turned e.g. brightness 0.8%
+        // into 80%.
+        if (auto* param = apvts.getParameter (paramId))
+        {
+            param->setValueNotifyingHost (param->convertTo0to1 (value));
+            ++numSet;
+            morphChanged = morphChanged || paramId == "morph";
         }
     }
+
+    if (morphChanged)
+    {
+        updateMorphState();
+        updateBlendedImage();
+    }
+
+    if (numSet > 0)
+        frontendStateKnown = true;
+
+    return numSet;
+}
+
+juce::var PhotoSynthAudioProcessor::getInitialStateForFrontend() const
+{
+    auto* obj = new juce::DynamicObject();
+    obj->setProperty ("bpm", (double) getBpm());
+    obj->setProperty ("isNativeHost", true);
+    obj->setProperty ("hasState", frontendStateKnown);
+    obj->setProperty ("slotAName", slotAName);
+    obj->setProperty ("slotBName", slotBName);
+    // Only hand back photos that came from the UI (or a saved project). The C++
+    // procedural preset renders are NOT the UI's preset photos and must not replace them.
+    obj->setProperty ("slotADataUrl", slotAFrontendDataUrl);
+    obj->setProperty ("slotBDataUrl", slotBFrontendDataUrl);
+    obj->setProperty ("morph", (double) paramPtrs.morph->load());
+
+    auto* paramsObj = new juce::DynamicObject();
+    for (auto* param : getParameters())
+        if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (param))
+            paramsObj->setProperty (p->paramID, (double) p->convertFrom0to1 (p->getValue()));
+
+    obj->setProperty ("parameters", juce::var (paramsObj));
+    return juce::var (obj);
 }
 
 void PhotoSynthAudioProcessor::updateMorphState()

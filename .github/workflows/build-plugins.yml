@@ -170,9 +170,42 @@ jobs:
           path: ${{ matrix.artifact_name }}.zip
           retention-days: 30
 
+  package-all:
+    name: Package All Platforms (Mac, Windows, Linux)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-builds
+
+      - name: Create Unified Multi-Platform Summary Table
+        run: |
+          mkdir -p release-bundle
+          find all-builds -name "*.zip" -exec cp {} release-bundle/ \;
+          ls -lh release-bundle/
+          
+          echo "## 🎹 Photo Synth Multi-Platform Plugin Binaries" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Formats Included | Archive Package |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🍏 **macOS** | Universal Binary: VST3, AU (.component), Standalone (.app) | \`PhotoSynth-macOS-Universal.zip\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🪟 **Windows** | 64-bit VST3, Standalone (.exe), WebView2 Assets | \`PhotoSynth-Windows-x64.zip\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🐧 **Linux** | 64-bit VST3, Standalone Binary, WebKitGTK Assets | \`PhotoSynth-Linux-x64.zip\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All platforms compiled successfully with the native JUCE 8 IPC bridge and custom wavetable engine." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Unified Multi-Platform Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSynth-All-Platforms
+          path: release-bundle/*
+          retention-days: 30
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: package-all
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

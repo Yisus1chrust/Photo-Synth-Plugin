@@ -57,6 +57,7 @@ juce_add_plugin(PhotoSynth
     PRODUCT_NAME "Photo Synth"
     BUNDLE_ID "com.modularsoundtechnologies.photosynth"
     NEEDS_WEBVIEW2 ${PHOTO_SYNTH_NEEDS_WEBVIEW2}
+    VST3_CATEGORIES Instrument Synth
 )
 
 # Source files

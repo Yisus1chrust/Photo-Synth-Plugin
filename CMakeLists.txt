@@ -49,6 +49,9 @@ juce_add_plugin(PhotoSynth
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     AU_MAIN_TYPE kAudioUnitType_MusicDevice
+    # Explicit instrument categorisation so VST3 hosts list it under Instruments
+    # (not Fx) and route their MIDI tracks / virtual keyboards to it.
+    VST3_CATEGORIES Instrument Synth
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE MSTe

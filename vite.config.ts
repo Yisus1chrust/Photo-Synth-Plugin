@@ -5,6 +5,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Relative asset URLs so the bundle works when served from the JUCE resource
+    // provider root (embedded in the plugin binary) on every OS / WebView backend.
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

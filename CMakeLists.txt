@@ -49,9 +49,6 @@ juce_add_plugin(PhotoSynth
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     AU_MAIN_TYPE kAudioUnitType_MusicDevice
-    # Explicit instrument categorisation so VST3 hosts list it under Instruments
-    # (not Fx) and route their MIDI tracks / virtual keyboards to it.
-    VST3_CATEGORIES Instrument Synth
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE MSTe
@@ -60,14 +57,25 @@ juce_add_plugin(PhotoSynth
     PRODUCT_NAME "Photo Synth"
     BUNDLE_ID "com.modularsoundtechnologies.photosynth"
     NEEDS_WEBVIEW2 ${PHOTO_SYNTH_NEEDS_WEBVIEW2}
+    # Explicit instrument categorisation so VST3 hosts list it under Instruments
+    # (not Fx) and route their MIDI tracks / virtual keyboards to it.
     VST3_CATEGORIES Instrument Synth
 )
+
+# Embed the built React UI (dist/) into the binary: no dev server, no absolute paths.
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(EmbedWebUI)
+embed_web_ui(PhotoSynth
+    WEB_ROOT  "${CMAKE_CURRENT_SOURCE_DIR}"
+    NAMESPACE PhotoSynthWebUI
+    EXCLUDE   "^assets/aistudio/")   # AI Studio exports (docs/video) are not part of the UI
 
 # Source files
 target_sources(PhotoSynth PRIVATE
     plugin/Source/ImageAnalyzer.h
     plugin/Source/ImageAnalyzer.cpp
     plugin/Source/SynthEngine.h
+    plugin/Source/BandlimitedWavetable.h
     plugin/Source/SynthEngine.cpp
     plugin/Source/EffectsChain.h
     plugin/Source/EffectsChain.cpp
@@ -78,16 +86,16 @@ target_sources(PhotoSynth PRIVATE
     plugin/Source/PluginProcessor.cpp
     plugin/Source/PluginEditor.h
     plugin/Source/PluginEditor.cpp
+    plugin/Source/WebUIResourceProvider.h
     plugin/Source/CustomLookAndFeel.h
 )
 
 # Compile Definitions: JUCE_WEB_BROWSER=1 enables the EVERSYNTH Hybrid WebView engine
 target_compile_definitions(PhotoSynth PRIVATE
     JUCE_WEB_BROWSER=1
-    JUCE_USE_WIN_WEBVIEW2=1
+    JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0
     DONT_SET_USING_JUCE_NAMESPACE=1
 )
 

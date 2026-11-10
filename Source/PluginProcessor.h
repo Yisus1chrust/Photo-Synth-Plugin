@@ -17,7 +17,24 @@
 #include <array>
 #include <atomic>
 
-class PhotoSynthAudioProcessor : public juce::AudioProcessor
+/**
+    State ownership model
+    ---------------------
+    The processor is the single owner of ALL plugin state; the WebView editor is disposable.
+      * APVTS            - every automatable/sound parameter (incl. effects + morph).
+      * Slot photos      - the user's photo data URLs (+ names) for slots A/B. The photo
+                           analysis (which drives the engine/"wavetable" voicing) is stored
+                           too and is re-derived deterministically from the photo on load.
+      * UI state blob    - opaque JSON owned by the React UI (selected preset, keyboard
+                           visibility, effect panel values, colour points, ...).
+    get/setStateInformation serialise all three. The editor fetches everything with the
+    "getState" native function on page load and pushes every change back. When the host
+    restores a state while the editor is open, the processor broadcasts a change message
+    and the editor emits a "stateRestored" event so the UI re-hydrates (no feedback loop:
+    UI-originated changes never trigger that broadcast).
+*/
+class PhotoSynthAudioProcessor : public juce::AudioProcessor,
+                                 public juce::ChangeBroadcaster
 {
 public:
     PhotoSynthAudioProcessor();
@@ -80,6 +97,19 @@ public:
         real units (not 0-1 normalised). */
     juce::var getInitialStateForFrontend() const;
 
+    /** Full state for the UI: getInitialStateForFrontend() + "uiState" (parsed JSON) +
+        "stateRevision" (increments on every host setStateInformation). */
+    juce::var getFullStateForFrontend() const;
+
+    /** Opaque UI-only state blob (JSON text) owned by the React UI. Message thread. */
+    void setUiState (const juce::String& json);
+    juce::String getUiState() const;
+
+    /** Incremented on every setStateInformation (host preset/project restore). */
+    int getStateRevision() const noexcept { return stateRevision.load(); }
+
+    static constexpr int stateFormatVersion = 2;
+
     bool hasFrontendState() const { return frontendStateKnown; }
 
     /** Message thread: analysis for the current morph position (A/B interpolation). */
@@ -122,6 +152,7 @@ private:
     juce::SpinLock uiMidiWriteLock;
     void pushUiMidi (const juce::MidiMessage& message);
     void drainUiMidiInto (juce::MidiBuffer& midiMessages);
+    static constexpr int midiScratchBytes = 32768;
 
     //==========================================================================
     // Cached APVTS parameter pointers (avoids String construction + map lookups
@@ -183,6 +214,21 @@ private:
 
     photosynth::EffectsChain effectsChain;
     juce::dsp::Limiter<float> masterLimiter;
+
+    // Click-free master volume (block-rate APVTS value glided per sample).
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> masterGainSmoothed { 1.0f };
+
+    // Pre-allocated MIDI scratch buffer: host MIDI + UI keyboard events are merged here so
+    // the audio thread never grows (allocates) the host's MidiBuffer.
+    juce::MidiBuffer mergedMidi;
+
+    // UI-only state blob + guard (setStateInformation may arrive on a non-message thread).
+    juce::String uiStateJson;
+    mutable juce::CriticalSection stateLock;
+    std::atomic<int> stateRevision { 0 };
+
+    static void writeAnalysis (juce::XmlElement& e, const ImageAnalysisResult& r);
+    static ImageAnalysisResult readAnalysis (const juce::XmlElement& e);
 
     float scopeBuffer[scopeBufferSize] { 0.0f };
     int scopeBufferWriteIndex { 0 };

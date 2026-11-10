@@ -16,6 +16,7 @@ PhotoSynthAudioProcessor::PhotoSynthAudioProcessor()
     // The custom engine (sound + 16 SynthVoices + shared patch) is fully built by
     // PhotoSynthEngine's constructor - no UI callback is needed to make it playable.
     cacheParameterPointers();
+    mergedMidi.ensureSize (midiScratchBytes);
 
     // Default starting presets matching the web UI
     imageSlotA = photosynth::PresetFactory::createSynthwaveSunset();
@@ -296,6 +297,10 @@ void PhotoSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) juce::jmax (1, samplesPerBlock), numOutputs };
     effectsChain.prepare (spec);
     masterLimiter.prepare (spec);
+
+    mergedMidi.ensureSize (midiScratchBytes);
+    masterGainSmoothed.reset (sampleRate, 0.03);
+    masterGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (paramPtrs.volume->load(), -60.0f) * 0.35f);
 }
 
 void PhotoSynthAudioProcessor::releaseResources()
@@ -372,7 +377,10 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     // 4. Merge on-screen keyboard notes (lock-free FIFO) into the host MIDI stream.
     //    Host MIDI is ALWAYS processed - there is no dependency on the UI having
     //    sent anything, and no lock shared with the UI thread is taken here.
-    drainUiMidiInto (midiMessages);
+    //    Merged into a pre-allocated scratch buffer (no allocation on the audio thread).
+    mergedMidi.clear();
+    mergedMidi.addEvents (midiMessages, 0, -1, 0);
+    drainUiMidiInto (mergedMidi);
 
     if (numSamples == 0 || buffer.getNumChannels() == 0)
         return;
@@ -381,7 +389,7 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     //    custom voices. juce::Synthesiser iterates the MidiBuffer and handles noteOn,
     //    noteOff, pitchWheel, sustain/sostenuto, allNotesOff/allSoundOff sample-accurately;
     //    voices are allocated/started right here on the audio thread.
-    engine.render (buffer, midiMessages, 0, numSamples);
+    engine.render (buffer, mergedMidi, 0, numSamples);
 
     // 6. Effects Chain & Master Gain
     const auto analysis = AnalysisSnapshot::interpolate (rtSnapA, rtSnapB, paramPtrs.morph->load());
@@ -407,7 +415,8 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     const float volDb = paramPtrs.volume->load();
     const float masterGain = juce::Decibels::decibelsToGain (volDb, -60.0f) * 0.35f;
-    buffer.applyGain (masterGain);
+    masterGainSmoothed.setTargetValue (masterGain);
+    masterGainSmoothed.applyGain (buffer, numSamples);   // click-free volume changes
 
     // 7. Oscilloscope capture - try-lock so the audio thread never waits on the UI
     {
@@ -422,65 +431,192 @@ void PhotoSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     }
 }
 
-// 8. Explicit State Serialization (APVTS Binary XML)
+// 8. State serialisation (format v2)
+//    <PhotoSynthState version="2" currentBpm="..">
+//      <Parameters ...APVTS... />
+//      <Slots slotAName=".." slotBName=".." slotADataUrl=".." slotBDataUrl=".." />
+//      <AnalysisA .. /> <AnalysisB .. />     photo analysis that voices the engine
+//      <UIState>{json}</UIState>             opaque React UI blob
+//    </PhotoSynthState>
+//    v1 projects (root = <Parameters> with slot attributes) are still read.
+void PhotoSynthAudioProcessor::writeAnalysis (juce::XmlElement& e, const ImageAnalysisResult& r)
+{
+    e.setAttribute ("seedHex", r.seedHex);
+    e.setAttribute ("pixelSeed", juce::String ((juce::int64) r.pixelSeed));
+    e.setAttribute ("brightness", r.brightness);   e.setAttribute ("saturation", r.saturation);
+    e.setAttribute ("complexity", r.complexity);   e.setAttribute ("timbreDna", r.timbreDna);
+    e.setAttribute ("earthyMutedness", r.earthyMutedness);
+    e.setAttribute ("colorEntropy", r.colorEntropy);
+    e.setAttribute ("archetype", (int) r.archetype);
+    e.setAttribute ("era", (int) r.temporalEra.era);
+    e.setAttribute ("eraLabel", r.temporalEra.eraLabel);
+    e.setAttribute ("cutoff", r.cutoff);           e.setAttribute ("resonance", r.resonance);
+    e.setAttribute ("attack", r.attack);           e.setAttribute ("decay", r.decay);
+    e.setAttribute ("sustain", r.sustain);         e.setAttribute ("release", r.release);
+    e.setAttribute ("lfoRate", r.lfoRate);         e.setAttribute ("lfoDepth", r.lfoDepth);
+    e.setAttribute ("drive", r.drive);
+    e.setAttribute ("delayMix", r.delayMix);       e.setAttribute ("reverbMix", r.reverbMix);
+}
+
+ImageAnalysisResult PhotoSynthAudioProcessor::readAnalysis (const juce::XmlElement& e)
+{
+    ImageAnalysisResult r;
+    auto f = [&e] (const char* n, float d) { return (float) e.getDoubleAttribute (n, d); };
+    r.seedHex = e.getStringAttribute ("seedHex");
+    r.pixelSeed = (juce::uint64) e.getStringAttribute ("pixelSeed").getLargeIntValue();
+    r.brightness = f ("brightness", r.brightness);  r.saturation = f ("saturation", r.saturation);
+    r.complexity = f ("complexity", r.complexity);  r.timbreDna = f ("timbreDna", r.timbreDna);
+    r.earthyMutedness = f ("earthyMutedness", r.earthyMutedness);
+    r.colorEntropy = f ("colorEntropy", r.colorEntropy);
+    r.archetype = (SynthArchetype) juce::jlimit (0, 2, e.getIntAttribute ("archetype", (int) r.archetype));
+    r.temporalEra.era = (TemporalEra) e.getIntAttribute ("era", (int) r.temporalEra.era);
+    r.temporalEra.eraLabel = e.getStringAttribute ("eraLabel", r.temporalEra.eraLabel);
+    r.cutoff = f ("cutoff", r.cutoff);     r.resonance = f ("resonance", r.resonance);
+    r.attack = f ("attack", r.attack);     r.decay = f ("decay", r.decay);
+    r.sustain = f ("sustain", r.sustain);  r.release = f ("release", r.release);
+    r.lfoRate = f ("lfoRate", r.lfoRate);  r.lfoDepth = f ("lfoDepth", r.lfoDepth);
+    r.drive = f ("drive", r.drive);
+    r.delayMix = f ("delayMix", r.delayMix);  r.reverbMix = f ("reverbMix", r.reverbMix);
+    return r;
+}
+
 void PhotoSynthAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    auto state = apvts.copyState();
-    std::unique_ptr<juce::XmlElement> xml (state.createXml());
-    if (xml != nullptr) {
-        xml->setAttribute ("slotAName", slotAName);
-        xml->setAttribute ("slotBName", slotBName);
-        xml->setAttribute ("currentBpm", (double) currentBpm);
-        // The user's photos (UI-downscaled JPEG data URLs, typically < 150 KB each).
-        if (slotAFrontendDataUrl.isNotEmpty()) xml->setAttribute ("slotADataUrl", slotAFrontendDataUrl);
-        if (slotBFrontendDataUrl.isNotEmpty()) xml->setAttribute ("slotBDataUrl", slotBFrontendDataUrl);
+    juce::XmlElement root ("PhotoSynthState");
+    root.setAttribute ("version", stateFormatVersion);
+    root.setAttribute ("currentBpm", (double) currentBpm.load());
 
-        copyXmlToBinary (*xml, destData);
+    if (auto paramsXml = apvts.copyState().createXml())
+        root.addChildElement (paramsXml.release());
+
+    {
+        const juce::ScopedLock sl (stateLock);
+        auto* slots = root.createNewChildElement ("Slots");
+        slots->setAttribute ("slotAName", slotAName);
+        slots->setAttribute ("slotBName", slotBName);
+        // The user's photos (UI-downscaled JPEG data URLs, typically < 150 KB each).
+        if (slotAFrontendDataUrl.isNotEmpty()) slots->setAttribute ("slotADataUrl", slotAFrontendDataUrl);
+        if (slotBFrontendDataUrl.isNotEmpty()) slots->setAttribute ("slotBDataUrl", slotBFrontendDataUrl);
+
+        writeAnalysis (*root.createNewChildElement ("AnalysisA"), analysisSlotA);
+        writeAnalysis (*root.createNewChildElement ("AnalysisB"), analysisSlotB);
+
+        if (uiStateJson.isNotEmpty())
+            root.createNewChildElement ("UIState")->addTextElement (uiStateJson);
     }
+
+    copyXmlToBinary (root, destData);
 }
 
 void PhotoSynthAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
-    if (xmlState.get() != nullptr) {
-        if (xmlState->hasTagName (apvts.state.getType())) {
-            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
-        } else if (auto* child = xmlState->getChildByName (apvts.state.getType().toString())) {
-            apvts.replaceState (juce::ValueTree::fromXml (*child));
-        } else {
-            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+    if (xmlState == nullptr)
+        return;
+
+    const auto paramsType = apvts.state.getType().toString();
+    const juce::XmlElement* paramsXml = nullptr;
+    const juce::XmlElement* slotsXml = nullptr;     // element holding the slot attributes
+
+    if (xmlState->hasTagName ("PhotoSynthState"))
+    {
+        paramsXml = xmlState->getChildByName (paramsType);
+        slotsXml  = xmlState->getChildByName ("Slots");
+    }
+    else
+    {
+        // v1: root is the APVTS tree carrying the slot attributes itself.
+        paramsXml = xmlState->hasTagName (paramsType) ? xmlState.get() : xmlState->getChildByName (paramsType);
+        slotsXml  = xmlState.get();
+    }
+
+    if (paramsXml != nullptr)
+    {
+        auto tree = juce::ValueTree::fromXml (*paramsXml);
+        // Strip v1 non-parameter attributes so they do not linger in the APVTS tree.
+        for (auto* id : { "slotAName", "slotBName", "currentBpm", "slotADataUrl", "slotBDataUrl" })
+            tree.removeProperty (id, nullptr);
+        apvts.replaceState (tree);
+    }
+
+    if (xmlState->hasAttribute ("currentBpm"))
+        currentBpm.store ((float) xmlState->getDoubleAttribute ("currentBpm", 120.0));
+
+    juce::String savedA, savedB, restoredNameA, restoredNameB;
+    {
+        const juce::ScopedLock sl (stateLock);
+        if (slotsXml != nullptr)
+        {
+            if (slotsXml->hasAttribute ("slotAName")) slotAName = slotsXml->getStringAttribute ("slotAName");
+            if (slotsXml->hasAttribute ("slotBName")) slotBName = slotsXml->getStringAttribute ("slotBName");
+            savedA = slotsXml->getStringAttribute ("slotADataUrl");
+            savedB = slotsXml->getStringAttribute ("slotBDataUrl");
         }
-
-        if (xmlState->hasAttribute ("slotAName"))
-            slotAName = xmlState->getStringAttribute ("slotAName");
-        if (xmlState->hasAttribute ("slotBName"))
-            slotBName = xmlState->getStringAttribute ("slotBName");
-        if (xmlState->hasAttribute ("currentBpm"))
-            currentBpm.store ((float) xmlState->getDoubleAttribute ("currentBpm", 120.0));
-
-        // Restore the slot photos (and therefore their analysis) so a reopened DAW
-        // project sounds the same without the UI having to re-sync. Prefer the saved
-        // user photos; fall back to the factory preset renders for older projects.
-        const auto savedA = xmlState->getStringAttribute ("slotADataUrl");
-        const auto savedB = xmlState->getStringAttribute ("slotBDataUrl");
-        const auto restoredNameA = slotAName, restoredNameB = slotBName;
+        restoredNameA = slotAName;
+        restoredNameB = slotBName;
         slotAFrontendDataUrl.clear();
         slotBFrontendDataUrl.clear();
 
-        if (! (savedA.isNotEmpty() && syncSlotImageFromFrontend ("A", savedA, restoredNameA)))
-            if (const int idxA = presetIndexForName (slotAName); idxA >= 0) loadSlotAPreset (idxA);
-        if (! (savedB.isNotEmpty() && syncSlotImageFromFrontend ("B", savedB, restoredNameB)))
-            if (const int idxB = presetIndexForName (slotBName); idxB >= 0) loadSlotBPreset (idxB);
-
-        // The restored APVTS is a deliberate patch: the UI must adopt it, not overwrite it.
-        frontendStateKnown = true;
-
-        // Message thread: only publish data. The audio thread picks the new patch up
-        // at the start of its next processBlock (no direct voice mutation from here).
-        publishAnalysisSnapshots();
-        updateMorphState();
-        updateBlendedImage();
+        auto* uiXml = xmlState->getChildByName ("UIState");
+        uiStateJson = uiXml != nullptr ? uiXml->getAllSubText() : juce::String();
     }
+
+    // Restore the slot photos and therefore their analysis, so a reopened project sounds
+    // identical without the UI. Order of preference: saved user photo (re-analysed
+    // deterministically) -> saved analysis -> factory preset render (older projects).
+    auto restoreSlot = [&] (const juce::String& slot, const juce::String& saved, const juce::String& name,
+                            const char* analysisTag)
+    {
+        if (saved.isNotEmpty() && syncSlotImageFromFrontend (slot, saved, name))
+            return;
+        if (auto* a = xmlState->getChildByName (analysisTag))
+        {
+            (slot == "A" ? analysisSlotA : analysisSlotB) = readAnalysis (*a);
+            return;
+        }
+        if (const int idx = presetIndexForName (name); idx >= 0)
+            slot == "A" ? loadSlotAPreset (idx) : loadSlotBPreset (idx);
+    };
+    restoreSlot ("A", savedA, restoredNameA, "AnalysisA");
+    restoreSlot ("B", savedB, restoredNameB, "AnalysisB");
+
+    // The restored APVTS is a deliberate patch: the UI must adopt it, not overwrite it.
+    frontendStateKnown = true;
+
+    // Message thread: only publish data. The audio thread picks the new patch up
+    // at the start of its next processBlock (no direct voice mutation from here).
+    publishAnalysisSnapshots();
+    updateMorphState();
+    updateBlendedImage();
+
+    // Tell an open editor to re-hydrate the UI (async, delivered on the message thread).
+    ++stateRevision;
+    sendChangeMessage();
+}
+
+void PhotoSynthAudioProcessor::setUiState (const juce::String& json)
+{
+    const juce::ScopedLock sl (stateLock);
+    uiStateJson = json;
+}
+
+juce::String PhotoSynthAudioProcessor::getUiState() const
+{
+    const juce::ScopedLock sl (stateLock);
+    return uiStateJson;
+}
+
+juce::var PhotoSynthAudioProcessor::getFullStateForFrontend() const
+{
+    auto state = getInitialStateForFrontend();
+    if (auto* obj = state.getDynamicObject())
+    {
+        const auto ui = getUiState();
+        obj->setProperty ("uiState", ui.isNotEmpty() ? juce::JSON::parse (ui) : juce::var());
+        obj->setProperty ("stateRevision", getStateRevision());
+        obj->setProperty ("stateVersion", stateFormatVersion);
+    }
+    return state;
 }
 
 void PhotoSynthAudioProcessor::noteOn (int midiNoteNumber, float velocity, int midiChannel)
@@ -614,12 +750,12 @@ bool PhotoSynthAudioProcessor::syncSlotImageFromFrontend (const juce::String& sl
 
     if (slot == "B")
     {
-        slotBFrontendDataUrl = dataUrl;
+        { const juce::ScopedLock sl (stateLock); slotBFrontendDataUrl = dataUrl; }
         loadSlotBImage (decodedImg, name);
     }
     else
     {
-        slotAFrontendDataUrl = dataUrl;
+        { const juce::ScopedLock sl (stateLock); slotAFrontendDataUrl = dataUrl; }
         loadSlotAImage (decodedImg, name);
     }
     return true;

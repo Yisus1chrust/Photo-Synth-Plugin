@@ -8,16 +8,27 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "WebUIResourceProvider.h"
 
 PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     // Build JUCE 8 WebBrowserComponent Options
     auto options = juce::WebBrowserComponent::Options{}
+       #if JUCE_WINDOWS
+        // Edge/Chromium WebView2 (statically linked loader) instead of the legacy IE engine.
+        // A per-user writable data folder avoids failures inside read-only plugin folders.
+        .withBackend (juce::WebBrowserComponent::Options::Backend::webview2)
+        .withWinWebView2Options (juce::WebBrowserComponent::Options::WinWebView2{}
+                                     .withUserDataFolder (juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                                              .getChildFile ("PhotoSynthWebView2")))
+       #endif
         .withNativeIntegrationEnabled()
+        .withKeepPageLoadedWhenBrowserIsHidden()
         .withUserScript ("window.__PHOTO_SYNTH_HYBRID__ = true; window.__PHOTO_SYNTH_NATIVE_HOST__ = true;")
-        .withResourceProvider ([this](const juce::String& path) {
-            return getResource (path);
+        // The React UI is embedded in the binary (cmake/EmbedWebUI.cmake) - no disk/dev-server access.
+        .withResourceProvider ([](const juce::String& path) {
+            return webui::getResource (path);
         })
         // 1. setParameter native function (updates APVTS parameters live from React GUI)
         .withNativeFunction ("setParameter", [this](const juce::Array<juce::var>& args, auto completion) {
@@ -34,15 +45,13 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
                 else if (paramId == "masterVolume") paramId = "volume";
                 else if (paramId == "limiterEnabled") paramId = "limiter";
 
-                // Auto-scale normalized UI floats (0.0 - 1.0) to APVTS ranges
-                if (paramId == "color" && value <= 1.0f)
-                    value *= 360.0f;
-                else if ((paramId == "brightness" || paramId == "saturation" || paramId == "complexity") && value <= 1.0f)
-                    value *= 100.0f;
-
-                if (auto* param = audioProcessor.apvts.getParameter (paramId)) {
-                    param->setValueNotifyingHost (param->convertTo0to1 (value));
-                }
+                // Values always arrive in APVTS units (no "<= 1 means normalised" guessing,
+                // which turned e.g. brightness 0.8 % into 80 %).
+                if (std::isfinite (value))
+                    if (auto* param = audioProcessor.apvts.getParameter (paramId))
+                        param->setValueNotifyingHost (param->convertTo0to1 (value));
+                // UI-originated: do not echo it back as a host change.
+                snapshotParameters();
             }
             completion (juce::var());
         })
@@ -50,6 +59,7 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
         //    photo-derived patch). Logic lives in the processor so it is unit-testable.
         .withNativeFunction ("syncPatch", [this](const juce::Array<juce::var>& args, auto completion) {
             const int numSet = args.size() >= 1 ? audioProcessor.applyFrontendPatch (args[0]) : 0;
+            snapshotParameters();
             completion (juce::var (numSet));
         })
         // 3. Virtual Keyboard Note On
@@ -114,9 +124,21 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
             }
             completion (juce::var (false));
         })
-        // 7. Get Initial State: loads DAW project saved values into the React UI on mount
+        // 7. Get state: the UI hydrates from this on every page load (editor reopen,
+        //    track switch, project load) instead of starting from its defaults.
         .withNativeFunction ("getInitialState", [this](const juce::Array<juce::var>&, auto completion) {
-            completion (audioProcessor.getInitialStateForFrontend());
+            completion (audioProcessor.getFullStateForFrontend());
+        })
+        .withNativeFunction ("getState", [this](const juce::Array<juce::var>&, auto completion) {
+            completion (audioProcessor.getFullStateForFrontend());
+        })
+        // 7b. UI-only state blob (JSON text or object). Stored in the processor and saved
+        //     with the DAW project; never triggers a "stateRestored" echo.
+        .withNativeFunction ("setUiState", [this](const juce::Array<juce::var>& args, auto completion) {
+            if (args.size() >= 1)
+                audioProcessor.setUiState (args[0].isString() ? args[0].toString()
+                                                              : juce::JSON::toString (args[0], true));
+            completion (juce::var (true));
         })
         // 8. Real-time Oscilloscope Waveform Data for React visualizer
         .withNativeFunction ("getWaveformData", [this](const juce::Array<juce::var>& args, auto completion) {
@@ -141,11 +163,61 @@ PhotoSynthAudioEditor::PhotoSynthAudioEditor (PhotoSynthAudioProcessor& p)
     setResizeLimits (960, 600, 1920, 1200);
     setSize (1280, 800);
 
-    // Load web UI
+    // Host restores (preset / project / undo) while the editor is open -> push to UI.
+    audioProcessor.addChangeListener (this);
+
+    // Host automation / generic-editor changes -> push to UI (polled, message thread).
+    for (auto* param : audioProcessor.getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
+            trackedParams.push_back (ranged);
+    lastSentValues.resize (trackedParams.size(), 0.0f);
+    snapshotParameters();
+    startTimerHz (20);
+
+    // Load the embedded web UI
+    jassert (webui::hasEmbeddedUI());   // dist was not embedded at build time
     webBrowser->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 }
 
-PhotoSynthAudioEditor::~PhotoSynthAudioEditor() {}
+PhotoSynthAudioEditor::~PhotoSynthAudioEditor()
+{
+    stopTimer();
+    audioProcessor.removeChangeListener (this);
+}
+
+void PhotoSynthAudioEditor::snapshotParameters()
+{
+    for (size_t i = 0; i < trackedParams.size(); ++i)
+        lastSentValues[i] = trackedParams[i]->getValue();
+}
+
+void PhotoSynthAudioEditor::timerCallback()
+{
+    if (webBrowser == nullptr)
+        return;
+
+    for (size_t i = 0; i < trackedParams.size(); ++i)
+    {
+        const float norm = trackedParams[i]->getValue();
+        if (std::abs (norm - lastSentValues[i]) > 1.0e-6f)
+        {
+            lastSentValues[i] = norm;
+            auto* obj = new juce::DynamicObject();
+            obj->setProperty ("id", trackedParams[i]->paramID);
+            obj->setProperty ("value", (double) trackedParams[i]->convertFrom0to1 (norm));
+            webBrowser->emitEventIfBrowserIsVisible ("parameterChanged", juce::var (obj));
+        }
+    }
+}
+
+void PhotoSynthAudioEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // setStateInformation ran (host project/preset load). Everything changed at once:
+    // send one full-state event instead of dozens of parameter events.
+    snapshotParameters();
+    if (webBrowser != nullptr)
+        webBrowser->emitEventIfBrowserIsVisible ("stateRestored", audioProcessor.getFullStateForFrontend());
+}
 
 void PhotoSynthAudioEditor::paint (juce::Graphics& g)
 {
@@ -156,50 +228,4 @@ void PhotoSynthAudioEditor::resized()
 {
     if (webBrowser != nullptr)
         webBrowser->setBounds (getLocalBounds());
-}
-
-std::optional<juce::WebBrowserComponent::Resource> PhotoSynthAudioEditor::getResource (const juce::String& url)
-{
-    juce::String cleanUrl = url;
-    if (cleanUrl.startsWith ("/"))
-        cleanUrl = cleanUrl.substring (1);
-    if (cleanUrl.isEmpty() || cleanUrl == "/")
-        cleanUrl = "index.html";
-
-    // 1. Look in the plugin bundle's Resources directory
-    auto bundleDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile)
-                        .getParentDirectory().getParentDirectory().getChildFile ("Resources").getChildFile ("ui");
-    auto file = bundleDir.getChildFile (cleanUrl);
-
-    // 2. Dev / Fallback path: look in project dist/ folder
-    if (!file.existsAsFile()) {
-        auto devDir = juce::File::getSpecialLocation (juce::File::currentApplicationFile)
-                         .getChildFile ("dist");
-        file = devDir.getChildFile (cleanUrl);
-    }
-
-    if (!file.existsAsFile()) {
-        // Also check direct dist/ relative to working directory
-        file = juce::File::getCurrentWorkingDirectory().getChildFile ("dist").getChildFile (cleanUrl);
-    }
-
-    if (file.existsAsFile()) {
-        juce::MemoryBlock data;
-        file.loadFileAsData (data);
-
-        juce::String mime = "application/octet-stream";
-        if (cleanUrl.endsWith (".html")) mime = "text/html";
-        else if (cleanUrl.endsWith (".js")) mime = "application/javascript";
-        else if (cleanUrl.endsWith (".css")) mime = "text/css";
-        else if (cleanUrl.endsWith (".png")) mime = "image/png";
-        else if (cleanUrl.endsWith (".jpg") || cleanUrl.endsWith (".jpeg")) mime = "image/jpeg";
-        else if (cleanUrl.endsWith (".svg")) mime = "image/svg+xml";
-        else if (cleanUrl.endsWith (".wasm")) mime = "application/wasm";
-
-        std::vector<std::byte> byteVec (data.getSize());
-        std::memcpy (byteVec.data(), data.getData(), data.getSize());
-        return juce::WebBrowserComponent::Resource { std::move (byteVec), mime };
-    }
-
-    return std::nullopt;
 }

@@ -339,9 +339,130 @@ export default function App() {
     [processImageSourceToData, slotA, morphValue]
   );
 
+  // ---------------------------------------------------------------------------
+  // Plugin state persistence (wiring only, no visual changes)
+  // The C++ processor owns ALL state; this UI is disposable. On every page load
+  // (editor reopen, track switch, project load) the UI requests the full state with
+  // getState() and hydrates from it. Every UI change is pushed back (patch -> APVTS,
+  // photos -> syncSlotImage, everything else -> the UI-state blob).
+  // ---------------------------------------------------------------------------
+  const UI_STATE_VERSION = 1;
+  // While hydrating from C++ (and briefly after) the UI must not push its own
+  // transient values back, which would create a feedback loop / overwrite the restore.
+  const hydratingRef = useRef(false);
+  const suppressPushUntilRef = useRef(0);
+
+  const hydrateFromNativeState = useCallback(
+    async (init: any, opts: { isMountedRef: { current: boolean }; pushToNative: boolean }) => {
+      hydratingRef.current = true;
+      try {
+        if (init && typeof init.bpm === 'number' && init.bpm > 0) {
+          setBpm(init.bpm);
+          setBpmInputVal(String(Math.round(init.bpm)));
+        }
+
+        const ui: any = init && init.uiState && typeof init.uiState === 'object' && init.uiState.v === UI_STATE_VERSION
+          ? init.uiState : null;
+
+        const loadSaved = async (url: any, name: any, slot: 'A' | 'B'): Promise<SlotData | null> => {
+          if (typeof url !== 'string' || url.length < 100) return null;
+          const savedMeta = ui && ui[slot === 'A' ? 'slotA' : 'slotB'];
+          // Saved analysis available: no re-analysis needed (identical values, instant restore).
+          if (savedMeta && savedMeta.metrics && savedMeta.patch) {
+            return { id: savedMeta.id || `slot-${slot.toLowerCase()}-native`, title: savedMeta.title || name || `Image ${slot}`,
+                     dataUrl: url, metrics: savedMeta.metrics, patch: savedMeta.patch };
+          }
+          try {
+            const d = await processImageSourceToData(url, name || `Image ${slot}`);
+            return { id: `slot-${slot.toLowerCase()}-native`, title: d.title, dataUrl: d.dataUrl, metrics: d.metrics, patch: d.patch };
+          } catch (e) {
+            console.warn(`Slot ${slot} restore failed:`, e);
+            return null;
+          }
+        };
+
+        const loadedA = init ? await loadSaved(init.slotADataUrl, init.slotAName, 'A') : null;
+        const loadedB = init ? await loadSaved(init.slotBDataUrl, init.slotBName, 'B') : null;
+        if (!opts.isMountedRef.current) return;
+
+        const effA = loadedA || defaultSlotA;
+        const effB = loadedB || defaultSlotB;
+        const hasState = !!(init && init.hasState);
+        const effectiveMorph = hasState && typeof init.morph === 'number' ? Math.max(0, Math.min(1, init.morph)) : 0.0;
+
+        let basePatch: PatchParameters = ui && ui.patch
+          ? ui.patch
+          : interpolatePatchParameters(effA.patch, effB.patch, effectiveMorph);
+        const baseMetrics: ImageMetrics = ui && ui.metrics
+          ? ui.metrics
+          : interpolateImageMetrics(effA.metrics, effB.metrics, effectiveMorph);
+
+        // APVTS (real units) is the source of truth for every parameter: overlay it so
+        // DAW edits / automation made after the UI blob was written also survive.
+        if (hasState && init.parameters && typeof init.parameters === 'object') {
+          const p = init.parameters;
+          const n = (v: any, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+          const pArch = typeof p.archetype === 'number' ? Math.round(p.archetype) : undefined;
+          const engineType = pArch === 1 ? 'digital_fm_bells' : pArch === 2 ? 'hybrid_wavetable' : pArch === 0 ? 'analog_brass' : basePatch.engineType;
+          const keepFmFlavour = pArch === 1 && (basePatch.engineType === 'digital_fm_bells' || basePatch.engineType === 'fm_square_bell');
+          const fx = { ...(basePatch.effects || createDefaultEffects()) };
+          const keys: (keyof ImageEffectsState)[] = ['delay', 'reverb', 'chorus', 'phaser', 'flanger', 'distortion'];
+          keys.forEach((k) => {
+            const en = p[`${k}Enabled`];
+            if (typeof en === 'number') fx[k] = { ...fx[k], enabled: en > 0.5 };
+          });
+          basePatch = {
+            ...basePatch,
+            engineType: (keepFmFlavour ? basePatch.engineType : engineType) as any,
+            cutoffOffset: n(p.cutoff, basePatch.cutoffOffset),
+            resonance: n(p.resonance, basePatch.resonance),
+            lfoRate: n(p.lfoRate, basePatch.lfoRate),
+            lfoDepth: n(p.lfoDepth, basePatch.lfoDepth),
+            masterVolume: n(p.volume, basePatch.masterVolume),
+            attackTime: n(p.attack, basePatch.attackTime),
+            decayTime: n(p.decay, basePatch.decayTime),
+            sustainLevel: n(p.sustain, basePatch.sustainLevel),
+            releaseTime: n(p.release, basePatch.releaseTime),
+            limiterEnabled: typeof p.limiter === 'number' ? p.limiter > 0.5 : basePatch.limiterEnabled,
+            threshold: n(p.threshold, basePatch.threshold),
+            effects: fx,
+          };
+        }
+
+        setSlotA(effA);
+        setSlotB(effB);
+        setImagePreviewUrl(ui && ui.previewSlot === 'B' ? effB.dataUrl : effA.dataUrl);
+        setMorphValue(effectiveMorph);
+        setPatch(basePatch);
+        setBaselinePatch(ui && ui.baselinePatch ? ui.baselinePatch : basePatch);
+        setMetrics(baseMetrics);
+        if (ui) {
+          if (typeof ui.selectedPresetId === 'string') setSelectedPresetId(ui.selectedPresetId);
+          if (typeof ui.showKeyboard === 'boolean') setShowKeyboard(ui.showKeyboard);
+          if (Array.isArray(ui.selectedColorPoints)) setSelectedColorPoints(ui.selectedColorPoints);
+          if (typeof ui.isAutoSweeping === 'boolean') setIsAutoSweeping(ui.isAutoSweeping);
+        }
+
+        if (opts.pushToNative) {
+          // Push photos (only ones C++ does not already hold) and the full patch into C++.
+          const syncs: Promise<any>[] = [];
+          if (!loadedA) syncs.push(pluginBridge.syncSlotImage('A', effA.dataUrl, effA.title));
+          if (!loadedB) syncs.push(pluginBridge.syncSlotImage('B', effB.dataUrl, effB.title));
+          syncs.push(pluginBridge.syncFullPatch(basePatch, baseMetrics, effectiveMorph));
+          await Promise.all(syncs);
+        }
+      } finally {
+        // Let React commit the hydrated values before auto-push effects may run again.
+        suppressPushUntilRef.current = performance.now() + 200;
+        hydratingRef.current = false;
+      }
+    },
+    [processImageSourceToData]
+  );
+
   // Unified Plugin Bridge Initialization & State Restoration (Mount Only)
   useEffect(() => {
-    let isMounted = true;
+    const isMountedRef = { current: true };
     if (initialLoadDone.current) return;
     initialLoadDone.current = true;
 
@@ -360,93 +481,38 @@ export default function App() {
       // DAW project / editor reopened) or push the UI defaults into C++.
       let init: any = null;
       try {
-        init = await pluginBridge.getInitialState();
+        init = await pluginBridge.getState();
       } catch (err) {
-        console.warn('getInitialState failed:', err);
+        console.warn('getState failed:', err);
       }
-      if (!isMounted) return;
+      if (!isMountedRef.current) return;
 
-      if (init && typeof init.bpm === 'number' && init.bpm > 0) {
-        setBpm(init.bpm);
-        setBpmInputVal(String(Math.round(init.bpm)));
-      }
+      await hydrateFromNativeState(init, { isMountedRef, pushToNative: true });
 
-      const loadSaved = async (url: any, name: any, slot: 'A' | 'B'): Promise<SlotData | null> => {
-        if (typeof url !== 'string' || url.length < 100) return null;
-        try {
-          const d = await processImageSourceToData(url, name || `Image ${slot}`);
-          return { id: `slot-${slot.toLowerCase()}-native`, title: d.title, dataUrl: d.dataUrl, metrics: d.metrics, patch: d.patch };
-        } catch (e) {
-          console.warn(`Slot ${slot} restore failed:`, e);
-          return null;
-        }
-      };
-
-      const loadedA = init ? await loadSaved(init.slotADataUrl, init.slotAName, 'A') : null;
-      const loadedB = init ? await loadSaved(init.slotBDataUrl, init.slotBName, 'B') : null;
-      if (!isMounted) return;
-
-      const effA = loadedA || defaultSlotA;
-      const effB = loadedB || defaultSlotB;
-      const hasState = !!(init && init.hasState);
-      const effectiveMorph = hasState && typeof init.morph === 'number' ? Math.max(0, Math.min(1, init.morph)) : 0.0;
-
-      let basePatch: PatchParameters = interpolatePatchParameters(effA.patch, effB.patch, effectiveMorph);
-      const baseMetrics: ImageMetrics = interpolateImageMetrics(effA.metrics, effB.metrics, effectiveMorph);
-
-      // Saved project / reopened editor: overlay the APVTS values (real units) so DAW
-      // edits and automation survive.
-      if (hasState && init.parameters && typeof init.parameters === 'object') {
-        const p = init.parameters;
-        const n = (v: any, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-        const pArch = typeof p.archetype === 'number' ? Math.round(p.archetype) : undefined;
-        const engineType = pArch === 1 ? 'digital_fm_bells' : pArch === 2 ? 'hybrid_wavetable' : pArch === 0 ? 'analog_brass' : basePatch.engineType;
-        const fx = { ...(basePatch.effects || createDefaultEffects()) };
-        const keys: (keyof ImageEffectsState)[] = ['delay', 'reverb', 'chorus', 'phaser', 'flanger', 'distortion'];
-        keys.forEach((k) => {
-          const en = p[`${k}Enabled`];
-          if (typeof en === 'number') fx[k] = { ...fx[k], enabled: en > 0.5 };
-        });
-        basePatch = {
-          ...basePatch,
-          engineType: engineType as any,
-          cutoffOffset: n(p.cutoff, basePatch.cutoffOffset),
-          resonance: n(p.resonance, basePatch.resonance),
-          lfoRate: n(p.lfoRate, basePatch.lfoRate),
-          lfoDepth: n(p.lfoDepth, basePatch.lfoDepth),
-          masterVolume: n(p.volume, basePatch.masterVolume),
-          attackTime: n(p.attack, basePatch.attackTime),
-          decayTime: n(p.decay, basePatch.decayTime),
-          sustainLevel: n(p.sustain, basePatch.sustainLevel),
-          releaseTime: n(p.release, basePatch.releaseTime),
-          limiterEnabled: typeof p.limiter === 'number' ? p.limiter > 0.5 : basePatch.limiterEnabled,
-          threshold: n(p.threshold, basePatch.threshold),
-          effects: fx,
-        };
-      }
-
-      setSlotA(effA);
-      setSlotB(effB);
-      setImagePreviewUrl(effA.dataUrl);
-      setMorphValue(effectiveMorph);
-      setPatch(basePatch);
-      setBaselinePatch(basePatch);
-      setMetrics(baseMetrics);
-
-      // Push photos (only ones C++ does not already hold) and the full patch into C++.
-      const syncs: Promise<any>[] = [];
-      if (!loadedA) syncs.push(pluginBridge.syncSlotImage('A', effA.dataUrl, effA.title));
-      if (!loadedB) syncs.push(pluginBridge.syncSlotImage('B', effB.dataUrl, effB.title));
-      syncs.push(pluginBridge.syncFullPatch(basePatch, baseMetrics, effectiveMorph));
-      await Promise.all(syncs);
-
-      if (isMounted) {
+      if (isMountedRef.current) {
         nativeReadyRef.current = true;
         setAudioStarted(true);
       }
     })();
 
+    // Host restored a project / preset while the editor is open: re-hydrate. C++ already
+    // holds exactly this state, so nothing is pushed back (no feedback loop).
+    const unsubRestore = pluginBridge.onStateRestored((state) => {
+      hydrateFromNativeState(state, { isMountedRef, pushToNative: false }).catch((e) =>
+        console.warn('stateRestored hydrate failed:', e)
+      );
+    });
+
+    // Host automation / host generic editor -> UI. Only parameters that map 1:1 onto the
+    // patch are adopted; photo-derived ones (colour, brightness, fx mixes...) are ignored
+    // here so an incoming event never triggers a sync that rewrites other values.
+    const directPatchKeys = new Set(['cutoffOffset', 'resonance', 'lfoRate', 'lfoDepth', 'masterVolume', 'attackTime',
+                                     'decayTime', 'sustainLevel', 'releaseTime', 'limiterEnabled', 'threshold']);
     const unsubParam = pluginBridge.onParameterChange((paramId, value) => {
+      if (paramId === 'morph') {
+        setMorphValue((prev) => (Math.abs(prev - value) < 1e-4 ? prev : Math.max(0, Math.min(1, value))));
+        return;
+      }
       setPatch((prev) => {
         if (!prev) return prev;
         const key = paramId === 'cutoff' ? 'cutoffOffset' :
@@ -456,7 +522,10 @@ export default function App() {
                     paramId === 'release' ? 'releaseTime' :
                     paramId === 'volume' ? 'masterVolume' :
                     paramId === 'limiter' ? 'limiterEnabled' : paramId;
-        return { ...prev, [key]: value };
+        if (!directPatchKeys.has(key)) return prev;
+        const v = key === 'limiterEnabled' ? value > 0.5 : value;
+        if ((prev as any)[key] === v) return prev;
+        return { ...prev, [key]: v };
       });
     });
 
@@ -466,7 +535,8 @@ export default function App() {
     });
 
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
+      unsubRestore();
       unsubParam();
       unsubBpm();
     };
@@ -479,12 +549,42 @@ export default function App() {
   const nativeSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!pluginBridge.isNativeEnvironment() || !nativeReadyRef.current || !patch || isAutoSweeping) return;
+    if (hydratingRef.current || performance.now() < suppressPushUntilRef.current) return;
     if (nativeSyncTimer.current) clearTimeout(nativeSyncTimer.current);
     nativeSyncTimer.current = setTimeout(() => {
       nativeSyncTimer.current = null;
+      if (hydratingRef.current) return;
       pluginBridge.syncFullPatch(patch, metrics, morphValue);
     }, 30);
   }, [patch, metrics, morphValue, isAutoSweeping]);
+
+  // UI-only state blob -> C++ (saved with the DAW project). Throttled: at most one push
+  // per 250 ms with the latest values, so continuous changes (auto-sweep) still persist.
+  const uiStateRef = useRef<Record<string, any> | null>(null);
+  const uiStateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!pluginBridge.isNativeEnvironment() || !nativeReadyRef.current) return;
+    const slotMeta = (s: SlotData | null) => (s ? { id: s.id, title: s.title, metrics: s.metrics, patch: s.patch } : null);
+    uiStateRef.current = {
+      v: UI_STATE_VERSION,
+      slotA: slotMeta(slotA),
+      slotB: slotMeta(slotB),
+      previewSlot: slotB && imagePreviewUrl === slotB.dataUrl && (!slotA || slotA.dataUrl !== imagePreviewUrl) ? 'B' : 'A',
+      patch,
+      baselinePatch,
+      metrics,
+      morph: morphValue,
+      isAutoSweeping,
+      selectedPresetId,
+      showKeyboard,
+      selectedColorPoints,
+    };
+    if (hydratingRef.current || uiStateTimer.current) return;
+    uiStateTimer.current = setTimeout(() => {
+      uiStateTimer.current = null;
+      if (uiStateRef.current && !hydratingRef.current) pluginBridge.setUiState(uiStateRef.current);
+    }, 250);
+  }, [audioStarted, slotA, slotB, imagePreviewUrl, patch, baselinePatch, metrics, morphValue, isAutoSweeping, selectedPresetId, showKeyboard, selectedColorPoints]);
 
   // Morph slider change handler
   const handleMorphChange = useCallback(

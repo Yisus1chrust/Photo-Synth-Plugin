@@ -54,6 +54,7 @@ class HybridPluginBridge {
   private waveformListeners: Set<(data: Float32Array) => void> = new Set();
   private parameterListeners: Set<(paramId: string, value: number) => void> = new Set();
   private bpmListeners: Set<(bpm: number) => void> = new Set();
+  private stateRestoredListeners: Set<(state: any) => void> = new Set();
   private lastWaveform = new Float32Array(512);
 
   constructor() {
@@ -103,6 +104,7 @@ class HybridPluginBridge {
     openFileChooser: 10 * 60 * 1000,
     syncSlotImage: 15000,
     getInitialState: 15000,
+    getState: 15000,
   };
 
   private timeoutFor(name: string): number {
@@ -253,6 +255,13 @@ class HybridPluginBridge {
         juceBackend.addEventListener('parameterChanged', (data: any) => {
           if (data && typeof data.id === 'string' && typeof data.value === 'number') {
             this.parameterListeners.forEach((fn) => fn(data.id, data.value));
+          }
+        });
+
+        // Host restored a project/preset while the editor is open: full state snapshot.
+        juceBackend.addEventListener('stateRestored', (data: any) => {
+          if (data && typeof data === 'object') {
+            this.stateRestoredListeners.forEach((fn) => fn(data));
           }
         });
 
@@ -443,6 +452,40 @@ class HybridPluginBridge {
       }
     }
     return null;
+  }
+
+  /**
+   * Full plugin state owned by the C++ processor (parameters in real units, slot photos,
+   * bpm, and the UI-only state blob saved with the DAW project). Called on every page
+   * load so a reopened editor hydrates from C++ instead of UI defaults.
+   */
+  public async getState(): Promise<any> {
+    if (!this.isConnectedToNative) return null;
+    try {
+      const state = await this.callNative('getState');
+      if (state && typeof state === 'object') return state;
+    } catch (err) {
+      console.warn('getState note:', err);
+    }
+    return this.getInitialState();
+  }
+
+  /** Store the UI-only state blob in the C++ processor (persisted with the project). */
+  public setUiState(uiState: Record<string, any>): Promise<any> {
+    if (!this.isConnectedToNative) return Promise.resolve(undefined);
+    let json: string;
+    try {
+      json = JSON.stringify(uiState);
+    } catch (err) {
+      console.warn('setUiState: state not serialisable', err);
+      return Promise.resolve(undefined);
+    }
+    return this.callNative('setUiState', json);
+  }
+
+  public onStateRestored(listener: (state: any) => void): () => void {
+    this.stateRestoredListeners.add(listener);
+    return () => this.stateRestoredListeners.delete(listener);
   }
 
   /**

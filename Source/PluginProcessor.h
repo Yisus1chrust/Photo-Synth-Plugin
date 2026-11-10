@@ -14,8 +14,27 @@
 #include "SynthEngine.h"
 #include "EffectsChain.h"
 #include "PresetFactory.h"
+#include <array>
+#include <atomic>
 
-class PhotoSynthAudioProcessor : public juce::AudioProcessor
+/**
+    State ownership model
+    ---------------------
+    The processor is the single owner of ALL plugin state; the WebView editor is disposable.
+      * APVTS            - every automatable/sound parameter (incl. effects + morph).
+      * Slot photos      - the user's photo data URLs (+ names) for slots A/B. The photo
+                           analysis (which drives the engine/"wavetable" voicing) is stored
+                           too and is re-derived deterministically from the photo on load.
+      * UI state blob    - opaque JSON owned by the React UI (selected preset, keyboard
+                           visibility, effect panel values, colour points, ...).
+    get/setStateInformation serialise all three. The editor fetches everything with the
+    "getState" native function on page load and pushes every change back. When the host
+    restores a state while the editor is open, the processor broadcasts a change message
+    and the editor emits a "stateRestored" event so the UI re-hydrates (no feedback loop:
+    UI-originated changes never trigger that broadcast).
+*/
+class PhotoSynthAudioProcessor : public juce::AudioProcessor,
+                                 public juce::ChangeBroadcaster
 {
 public:
     PhotoSynthAudioProcessor();
@@ -64,9 +83,37 @@ public:
     juce::String getSlotBName() const { return slotBName; }
     juce::String getImageSlotAAsDataUrl() const;
     juce::String getImageSlotBAsDataUrl() const;
-    void syncSlotImageFromFrontend (const juce::String& slot, const juce::String& dataUrl, const juce::String& name);
+    /** Decodes a frontend data URL (PNG/JPEG/GIF), analyses it and makes it the slot image.
+        Returns false if the image could not be decoded. Message thread only. */
+    bool syncSlotImageFromFrontend (const juce::String& slot, const juce::String& dataUrl, const juce::String& name);
 
-    ImageAnalysisResult getLatestAnalysis() const { return currentAnalysis; }
+    /** Body of the WebView "syncPatch" native function. Writes every known key of the
+        frontend patch object (already in APVTS units, e.g. cutoff Hz, brightness 0-100,
+        archetype 0/1/2) into the APVTS. processBlock pushes the APVTS into the voices at
+        the start of every block. Unknown keys are ignored. Returns number of params set. */
+    int applyFrontendPatch (const juce::var& patchObject);
+
+    /** Body of the WebView "getInitialState" native function. Parameter values are in
+        real units (not 0-1 normalised). */
+    juce::var getInitialStateForFrontend() const;
+
+    /** Full state for the UI: getInitialStateForFrontend() + "uiState" (parsed JSON) +
+        "stateRevision" (increments on every host setStateInformation). */
+    juce::var getFullStateForFrontend() const;
+
+    /** Opaque UI-only state blob (JSON text) owned by the React UI. Message thread. */
+    void setUiState (const juce::String& json);
+    juce::String getUiState() const;
+
+    /** Incremented on every setStateInformation (host preset/project restore). */
+    int getStateRevision() const noexcept { return stateRevision.load(); }
+
+    static constexpr int stateFormatVersion = 2;
+
+    bool hasFrontendState() const { return frontendStateKnown; }
+
+    /** Message thread: analysis for the current morph position (A/B interpolation). */
+    ImageAnalysisResult getLatestAnalysis() const;
     ImageAnalysisResult getAnalysisA() const { return analysisSlotA; }
     ImageAnalysisResult getAnalysisB() const { return analysisSlotB; }
 
@@ -84,39 +131,119 @@ public:
     void updateParametersFromAnalysis();
     void applyAnalysisToParameters (const ImageAnalysisResult& analysis);
 
-    float getBpm() const { return currentBpm; }
+    float getBpm() const { return currentBpm.load(); }
     void setBpm (float newBpm);
 
 private:
-    juce::Synthesiser synth;
-    juce::MidiBuffer internalMidiBuffer;
-    juce::CriticalSection midiLock;
+    //==========================================================================
+    // Custom synth engine (owns juce::Synthesiser + 16 SynthVoices + shared patch).
+    // Fully initialised in the constructor so DAW MIDI never hits an empty/
+    // unprepared voice pool.
+    PhotoSynthEngine engine;
 
+    //==========================================================================
+    // UI virtual keyboard -> audio thread MIDI FIFO (lock-free on the audio side).
+    // Producers (WebView native-function callbacks) serialise on a SpinLock that the
+    // audio thread never touches; the audio thread only reads the AbstractFifo.
+    struct UiMidiEvent { juce::uint8 data[3] { 0, 0, 0 }; int size { 0 }; };
+    static constexpr int uiMidiFifoCapacity = 1024;
+    juce::AbstractFifo uiMidiFifo { uiMidiFifoCapacity };
+    std::array<UiMidiEvent, uiMidiFifoCapacity> uiMidiEvents {};
+    juce::SpinLock uiMidiWriteLock;
+    void pushUiMidi (const juce::MidiMessage& message);
+    void drainUiMidiInto (juce::MidiBuffer& midiMessages);
+    static constexpr int midiScratchBytes = 32768;
+
+    //==========================================================================
+    // Cached APVTS parameter pointers (avoids String construction + map lookups
+    // on the audio thread every block).
+    struct ParamPointers
+    {
+        std::atomic<float>* cutoff {}; std::atomic<float>* resonance {};
+        std::atomic<float>* attack {}; std::atomic<float>* decay {};
+        std::atomic<float>* sustain {}; std::atomic<float>* release {};
+        std::atomic<float>* drive {}; std::atomic<float>* volume {};
+        std::atomic<float>* morph {}; std::atomic<float>* archetype {};
+        std::atomic<float>* color {}; std::atomic<float>* brightness {};
+        std::atomic<float>* saturation {}; std::atomic<float>* complexity {};
+        std::atomic<float>* lfoRate {}; std::atomic<float>* lfoDepth {};
+        std::atomic<float>* delayEnabled {}; std::atomic<float>* delayTime {};
+        std::atomic<float>* delayFeedback {}; std::atomic<float>* delayMix {};
+        std::atomic<float>* reverbEnabled {}; std::atomic<float>* reverbSize {};
+        std::atomic<float>* reverbDecay {}; std::atomic<float>* reverbMix {};
+        std::atomic<float>* chorusEnabled {}; std::atomic<float>* chorusRate {};
+        std::atomic<float>* chorusDepth {}; std::atomic<float>* chorusMix {};
+    } paramPtrs;
+    void cacheParameterPointers();
+
+    //==========================================================================
+    // Realtime-safe (POD) subset of the image analysis. ImageAnalysisResult holds
+    // juce::Strings, so it must never be copied/interpolated on the audio thread.
+    struct AnalysisSnapshot
+    {
+        SynthArchetype archetype { SynthArchetype::HybridWavetable };
+        TemporalEra era { TemporalEra::Era1970s };
+        float delayMix { 0.2f };
+        float reverbMix { 0.3f };
+
+        static AnalysisSnapshot from (const ImageAnalysisResult& r) noexcept;
+        static AnalysisSnapshot interpolate (const AnalysisSnapshot& a, const AnalysisSnapshot& b, float t) noexcept;
+    };
+    AnalysisSnapshot sharedSnapA, sharedSnapB;   // written by message thread under analysisLock
+    AnalysisSnapshot rtSnapA, rtSnapB;           // audio-thread private copies
+    juce::SpinLock analysisLock;
+    void publishAnalysisSnapshots();
+
+    //==========================================================================
     juce::Image imageSlotA;
     juce::Image imageSlotB;
     juce::Image blendedImage;
     juce::String slotAName { "Synthwave Sunset" };
     juce::String slotBName { "Obsidian Crypt" };
 
+    // Exact data URLs the frontend sent (the photos the user picked). Persisted in the
+    // plugin state so a reopened project / reopened editor shows and plays the same photo.
+    juce::String slotAFrontendDataUrl, slotBFrontendDataUrl;
+    // True once the host restored a state or the frontend pushed a patch, i.e. the APVTS
+    // holds a deliberate patch the UI must adopt rather than overwrite with its defaults.
+    bool frontendStateKnown { false };
+
     ImageAnalysisResult analysisSlotA;
     ImageAnalysisResult analysisSlotB;
-    ImageAnalysisResult currentAnalysis;
+    ImageAnalysisResult currentAnalysis;   // message thread only
 
     photosynth::EffectsChain effectsChain;
     juce::dsp::Limiter<float> masterLimiter;
 
+    // Click-free master volume (block-rate APVTS value glided per sample).
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> masterGainSmoothed { 1.0f };
+
+    // Pre-allocated MIDI scratch buffer: host MIDI + UI keyboard events are merged here so
+    // the audio thread never grows (allocates) the host's MidiBuffer.
+    juce::MidiBuffer mergedMidi;
+
+    // UI-only state blob + guard (setStateInformation may arrive on a non-message thread).
+    juce::String uiStateJson;
+    mutable juce::CriticalSection stateLock;
+    std::atomic<int> stateRevision { 0 };
+
+    static void writeAnalysis (juce::XmlElement& e, const ImageAnalysisResult& r);
+    static ImageAnalysisResult readAnalysis (const juce::XmlElement& e);
+
     float scopeBuffer[scopeBufferSize] { 0.0f };
     int scopeBufferWriteIndex { 0 };
-    juce::CriticalSection scopeLock;
+    juce::SpinLock scopeLock;
 
-    VoiceParams activeVoiceParams;
-    void refreshActiveVoiceParams();
+    /** Audio thread (or before audio starts): APVTS + analysis -> engine patch. */
+    void pushParametersToEngine();
+    VoiceParams buildVoiceParams() const noexcept;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    static int presetIndexForName (const juce::String& name);
     void updateMorphState();
     void updateBlendedImage();
 
-    float currentBpm { 120.0f };
+    std::atomic<float> currentBpm { 120.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PhotoSynthAudioProcessor)
 };

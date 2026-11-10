@@ -10,6 +10,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 #include "ImageAnalyzer.h"
+#include "BandlimitedWavetable.h"
 
 struct VoiceParams
 {
@@ -77,6 +78,24 @@ private:
 
     juce::ADSR ampEnv;
     juce::ADSR filterEnv;
+
+    // Click-free parameter smoothing: patch values arrive once per host block, these
+    // one-pole smoothers glide them per sample (~10 ms) so knob moves never zipper.
+    struct OnePole
+    {
+        float value { 0.0f }, coeff { 0.0f };
+        void setTimeMs (double sampleRate, float ms) noexcept { coeff = std::exp (-1.0f / (float) (sampleRate * ms * 0.001)); }
+        void snap (float v) noexcept { value = v; }
+        inline float next (float target) noexcept { value = target + coeff * (value - target); return value; }
+    };
+    OnePole smoothCutoff, smoothQ, smoothDrive, smoothSqrMix;
+    bool smoothersPrimed { false };
+
+    // Voice-steal / hard-stop de-click: the last output value decays to zero over ~3 ms
+    // instead of jumping, so a stolen voice restarting a new note does not click.
+    float lastOutL { 0.0f }, lastOutR { 0.0f };
+    float declickL { 0.0f }, declickR { 0.0f };
+    float declickCoeff { 0.99f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthVoice)
 };

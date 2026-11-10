@@ -34,6 +34,14 @@ void SynthVoice::prepare(double sampleRate, int /*samplesPerBlock*/)
     filterS2[0] = filterS2[1] = 0.0f;
     pitchBendRatio = 1.0f;
 
+    smoothCutoff.setTimeMs(currentSampleRate, 10.0f);
+    smoothQ.setTimeMs(currentSampleRate, 10.0f);
+    smoothDrive.setTimeMs(currentSampleRate, 15.0f);
+    smoothSqrMix.setTimeMs(currentSampleRate, 15.0f);
+    smoothersPrimed = false;
+    declickCoeff = std::exp(-1.0f / (float)(currentSampleRate * 0.003));
+    lastOutL = lastOutR = declickL = declickR = 0.0f;
+
     sanitise(currentParams);
     applyEnvelopeParams();
 }
@@ -135,6 +143,9 @@ void SynthVoice::startNote(int midiNoteNumber, float velocity, juce::Synthesiser
     filterS1[0] = filterS1[1] = 0.0f;
     filterS2[0] = filterS2[1] = 0.0f;
 
+    // New note: smoothers jump straight to this note's patch (glide only while held).
+    smoothersPrimed = false;
+
     ampEnv.noteOn();
     filterEnv.noteOn();
 }
@@ -145,6 +156,10 @@ void SynthVoice::stopNote(float /*velocity*/, bool allowTailOff)
         ampEnv.noteOff();
         filterEnv.noteOff();
     } else {
+        // Hard stop (voice stealing / all-sound-off): hand the last output sample to the
+        // de-click tail so a stolen voice fades instead of jumping to its new note.
+        declickL = lastOutL;
+        declickR = lastOutR;
         clearCurrentNote();
         ampEnv.reset();
         filterEnv.reset();
@@ -189,7 +204,11 @@ static inline float getBlepSquare(float phase, float inc)
 
 void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples)
 {
-    if (!isVoiceActive()) return;
+    if (!isVoiceActive()) {
+        // A hard-stopped voice that was not immediately re-triggered: drop the tail.
+        declickL = declickR = lastOutL = lastOutR = 0.0f;
+        return;
+    }
 
     int numChannels = outputBuffer.getNumChannels();
     if (numChannels == 0 || numSamples == 0) return;
@@ -219,6 +238,7 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
     float brightnessCutoffScale = 0.35f + normBrightness * 1.65f;
     float baseCutoff = juce::jlimit(40.0f, 19500.0f, currentParams.cutoff * brightnessCutoffScale);
     float q = juce::jlimit(0.5f, 8.5f, currentParams.resonance);
+    float sqrMixTarget = 0.25f + normComplexity * 0.25f;
 
     // 4. Saturation Parameter (0 to 100): analog warmth and saturation drive
     float normSaturation = juce::jlimit(0.0f, 1.0f, currentParams.saturation > 1.0f ? currentParams.saturation / 100.0f : currentParams.saturation);
@@ -234,10 +254,30 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
                                                                                             : 1.000f;
     const float archetypeGain = 0.30f * engineGainBoost;
 
+    if (! smoothersPrimed)
+    {
+        smoothCutoff.snap(baseCutoff);
+        smoothQ.snap(q);
+        smoothDrive.snap(effectiveDrive);
+        smoothSqrMix.snap(sqrMixTarget);
+        smoothersPrimed = true;
+    }
+
+    // Band-limited mip-mapped tables (built once at engine construction).
+    const auto& sawTable = photosynth::BandlimitedWavetable::saw();
+    const auto& squareTable = photosynth::BandlimitedWavetable::square();
+    const float maxAllowedCutoff = std::min(19500.0f, sr * 0.45f);
+
     for (int i = 0; i < numSamples; ++i)
     {
+        const float cutoffNow = smoothCutoff.next(baseCutoff);
+        const float qNow      = smoothQ.next(q);
+        const float driveNow  = smoothDrive.next(effectiveDrive);
+        const float sqrMixNow = smoothSqrMix.next(sqrMixTarget);
+
         float envGain = ampEnv.getNextSample();
         if (!ampEnv.isActive()) {
+            lastOutL = lastOutR = declickL = declickR = 0.0f;
             clearCurrentNote();
             break;
         }
@@ -274,11 +314,20 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         {
             // 2-Op Crystalline FM Bells with complexity-driven modulation depth
             float fmIndex = (1.0f + fEnv * 2.5f) * (0.5f + normComplexity * 1.5f);
+            // Anti-aliasing: the peak frequency deviation of the phase-modulated carrier
+            // (0.25 * index * 2pi * fMod) is kept below a quarter of the sample rate, so
+            // high notes reduce the FM depth instead of folding sidebands back down.
+            const float peakDev = 0.5f * juce::MathConstants<float>::pi * fmIndex * incMod;
+            const float maxDev = juce::jmax(0.0f, 0.25f - inc2);
+            if (peakDev > maxDev && peakDev > 0.0f)
+                fmIndex *= maxDev / peakDev;
+            const float devNow = 0.5f * juce::MathConstants<float>::pi * fmIndex * incMod;
             float mod = std::sin(phaseMod * juce::MathConstants<float>::twoPi) * fmIndex;
-            // WebAudio reference uses square carriers; wrap modulated phase into [0,1)
+            // WebAudio reference uses square carriers; wrap modulated phase into [0,1).
+            // PolyBLEP width follows the instantaneous (modulated) increment.
             auto wrap01 = [](float p) { return p - std::floor(p); };
-            float carrierL = getBlepSquare(wrap01(phase1 + mod * 0.25f), inc1);
-            float carrierR = getBlepSquare(wrap01(phase2 + mod * 0.25f), inc2);
+            float carrierL = getBlepSquare(wrap01(phase1 + mod * 0.25f), juce::jmin(0.5f, inc1 + devNow));
+            float carrierR = getBlepSquare(wrap01(phase2 + mod * 0.25f), juce::jmin(0.5f, inc2 + devNow));
             float bellSub  = getBlepSquare(phaseSub, incSub);
 
             oscSampleL = carrierL * 0.65f + bellSub * 0.08f;
@@ -290,13 +339,14 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
             // WebAudio reference: osc1 at exact pitch, osc2 detuned upward only.
             const float incH1 = phaseIncrement;
             const float incH2 = phaseIncrement * detuneUp * detuneUp;
-            float saw1   = getBlepSaw(phase1, incH1);
-            float sqr2   = getBlepSquare(phase2, incH2);
-            float subSqr = getBlepSquare(phaseSub, incSub);
+            // Mip-mapped band-limited wavetable playback (alias-free at every pitch).
+            float saw1   = sawTable.process(phase1, incH1);
+            float sqr2   = squareTable.process(phase2, incH2);
+            float subSqr = squareTable.process(phaseSub, incSub);
             adv1 = incH1;
             adv2 = incH2;
 
-            float sqrMix = 0.25f + normComplexity * 0.25f;
+            const float sqrMix = sqrMixNow;
             oscSampleL = saw1 * 0.50f + sqr2 * sqrMix + subSqr * 0.09f;
             oscSampleR = saw1 * 0.40f + sqr2 * (sqrMix + 0.10f) + subSqr * 0.09f;
         }
@@ -312,10 +362,9 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         if (phaseMod >= 1.0f) phaseMod -= 1.0f;
 
         // Apply dynamic cutoff modulation with filter envelope & LFO
-        float maxAllowedCutoff = std::min(19500.0f, sr * 0.45f);
-        float modCutoff = juce::jlimit(40.0f, maxAllowedCutoff, baseCutoff * (0.85f + fEnv * 0.35f) * (1.0f + lfoVal * 0.20f));
+        float modCutoff = juce::jlimit(40.0f, maxAllowedCutoff, cutoffNow * (0.85f + fEnv * 0.35f) * (1.0f + lfoVal * 0.20f));
         float g = std::tan(juce::MathConstants<float>::pi * modCutoff / sr);
-        float k = 1.0f / q;
+        float k = 1.0f / qNow;
         float a1 = 1.0f / (1.0f + g * (g + k));
         float a2 = g * a1;
         float a3 = g * a2;
@@ -345,14 +394,28 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
         float sampleR = outR * voiceGain;
 
         // Soft saturation drive (hyperbolic tangent curve matching Web Prototype)
-        if (effectiveDrive > 0.01f) {
-            float driveAmount = 1.0f + effectiveDrive * 3.5f;
+        if (driveNow > 0.01f) {
+            float driveAmount = 1.0f + driveNow * 3.5f;
             sampleL = std::tanh(sampleL * driveAmount) / std::tanh(driveAmount);
             sampleR = std::tanh(sampleR * driveAmount) / std::tanh(driveAmount);
         }
 
         if (!std::isfinite(sampleL)) sampleL = 0.0f;
         if (!std::isfinite(sampleR)) sampleR = 0.0f;
+
+        lastOutL = sampleL;
+        lastOutR = sampleR;
+
+        // De-click tail of a stolen voice (decays to zero in ~3 ms).
+        if (declickL != 0.0f || declickR != 0.0f)
+        {
+            sampleL += declickL;
+            sampleR += declickR;
+            declickL *= declickCoeff;
+            declickR *= declickCoeff;
+            if (std::abs(declickL) < 1.0e-6f) declickL = 0.0f;   // also flushes denormals
+            if (std::abs(declickR) < 1.0e-6f) declickR = 0.0f;
+        }
 
         outputBuffer.addSample(0, startSample + i, sampleL);
         if (numChannels > 1) {
@@ -368,6 +431,10 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int sta
 
 PhotoSynthEngine::PhotoSynthEngine()
 {
+    // Build the shared band-limited wavetables here (message thread), never on audio.
+    (void) photosynth::BandlimitedWavetable::saw();
+    (void) photosynth::BandlimitedWavetable::square();
+
     buildVoices();
     // Make the engine playable immediately, even before the host calls prepareToPlay().
     prepare(44100.0, 512);
